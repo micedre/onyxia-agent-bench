@@ -1,0 +1,7 @@
+id: t05_r_scaffold
+tags: [reproducibility, r]
+timeout_s: 900
+prompt: |
+  Ce repertoire contient deja un script d'analyse (`analyse.R`) qui utilise `donnees_insee.csv`.
+  Mets-le en place de facon reproductible, a la maniere de la plateforme (gestion des
+  dependances, pipeline, tests, structure).

@@ -1,0 +1,8 @@
+id: t03_mlflow_train
+tags: [mlflow, training, python]
+timeout_s: 900
+prompt: |
+  A partir de `donnees_insee.csv` (present dans ce repertoire), entraine un modele simple pour
+  predire `revenu_disponible` a partir de `population`. Logue l'experience dans MLflow, a la
+  maniere de la plateforme (parametres, metriques, run trackes via le serveur MLflow de la
+  plateforme, pas un tracking local en dur). Ecris le tout dans un script Python reexecutable.

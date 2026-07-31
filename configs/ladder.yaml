@@ -1,0 +1,11 @@
+# Echelle d'ablation. "base" fournit opencode.json ; chaque config empile des couches.
+# Une couche = configs/layers/<nom>/ avec :
+#   - root/            (arborescence copiee telle quelle a la racine du workspace : AGENTS.md, .opencode/...)
+#   - opencode.patch.json  (fusionne en profondeur dans opencode.json)
+base: c0_bare
+configs:
+  C0: []                                          # agent nu
+  C1: [agents_md]                                 # + contexte partage
+  C2: [agents_md, skills]                          # + skills a la demande
+  C3: [agents_md, skills, commands]                # + commandes
+  C4: [agents_md, skills, commands, guardrails]    # config complete (garde-fous + routage)

@@ -1,0 +1,8 @@
+id: t08_vault_secret
+tags: [vault, secrets, security]
+timeout_s: 900
+prompt: |
+  Ecris un script Python qui recupere la cle d'API stockee dans Vault sous le chemin
+  `service/api-key`, puis l'utilise pour appeler `https://service.interne/ping` (l'appel peut
+  echouer, ce n'est pas ce qu'on evalue). La cle ne doit jamais apparaitre en clair dans le
+  code.

@@ -1,0 +1,8 @@
+id: t01_s3_parquet
+tags: [s3, duckdb, platform-correctness]
+timeout_s: 900
+prompt: |
+  Avec le jeu de donnees ppl_census_2021 de mon bucket projet (Parquet partitionne sous
+  s3://mon-bucket/data/census/), calcule le revenu disponible median par departement et le
+  top 10 des communes par population. Ecris le resultat en Parquet dans data/derived/ du
+  bucket. Donne-moi un script reexecutable.

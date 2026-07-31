@@ -1,0 +1,6 @@
+id: t07_quarto_report
+tags: [quarto, reporting, reproducibility]
+timeout_s: 900
+prompt: |
+  Redige un rapport reproductible de l'analyse de `donnees_insee.csv` (texte + code + un
+  graphique) avec Quarto, pret a etre rendu en HTML.

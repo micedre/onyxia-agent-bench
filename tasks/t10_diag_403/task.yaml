@@ -1,0 +1,6 @@
+id: t10_diag_403
+tags: [diagnostic, heuristic, headline]
+timeout_s: 600
+prompt: |
+  Mon service est au rouge et mon notebook n'arrive plus a lire depuis S3 -- ca marchait
+  hier. Qu'est-ce qui se passe ?

@@ -1,0 +1,6 @@
+id: t04_py_scaffold
+tags: [reproducibility, python]
+timeout_s: 900
+prompt: |
+  Mets en place un nouveau projet Python reproductible pour cette analyse, a la maniere
+  de la plateforme (gestion d'environnement, lint, tests, structure).

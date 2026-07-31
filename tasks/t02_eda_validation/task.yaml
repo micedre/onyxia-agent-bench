@@ -1,0 +1,9 @@
+id: t02_eda_validation
+tags: [eda, validation, python]
+timeout_s: 900
+prompt: |
+  Le fichier `donnees_insee.csv` (present dans ce repertoire) contient des donnees communales
+  (commune, departement, population, revenu_disponible). Fais une analyse exploratoire (types,
+  valeurs manquantes, distributions cles), puis AVANT toute analyse ajoute une etape de
+  validation explicite des donnees (valeurs manquantes signalees, plages plausibles verifiees
+  pour population et revenu_disponible). Ecris le tout dans un script Python reexecutable.

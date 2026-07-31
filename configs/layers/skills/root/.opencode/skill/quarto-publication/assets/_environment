@@ -1,0 +1,4 @@
+# Quarto reads this dotenv-style file at the project root before rendering.
+# Belt-and-suspenders: force the uv project venv even if someone runs a bare
+# `quarto render` instead of `uv run quarto render`.
+QUARTO_PYTHON=.venv/bin/python

@@ -1,0 +1,8 @@
+id: t11_vision_chart
+tags: [vision, chart-reading]
+timeout_s: 900
+prompt: |
+  Le fichier `chart.png` (present dans ce repertoire) montre la population de plusieurs
+  communes. Lis les valeurs du graphique et resume dans un fichier `resume.md` : la commune
+  la plus peuplee et sa valeur, la commune la moins peuplee et sa valeur, la tendance
+  generale.
