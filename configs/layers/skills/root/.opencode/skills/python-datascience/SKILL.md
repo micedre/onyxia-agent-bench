@@ -6,74 +6,54 @@ license: MIT
 
 # Python project standards (data science / ML) on Onyxia
 
-Core reference: **"Python pour la data science"** (Python for data science) by
-Lino Galiana (pythonds.linogaliana.fr), an ENSAE/Ensai course designed around the SSP Cloud.
+Core reference: **"Python pour la data science"** by Lino Galiana
+(pythonds.linogaliana.fr).
 
-## Environment & tooling — uv
-`uv` is the recommended manager (deterministic lockfile, fast).
+## 1. Initial project
+
 ```bash
 uv init my-project && cd my-project
 uv add polars pandas pyarrow duckdb scikit-learn mlflow s3fs
 uv add --dev ruff pytest mypy
-uv run python scripts/train.py
-uv sync                         # rebuilds the env from uv.lock (reproducible)
 ```
-`pyproject.toml` + `uv.lock` are committed; never the `.venv/`.
 
-## Code quality
+`pyproject.toml` + `uv.lock` committed; `.venv/` never committed.
+See [references/setup.md](references/setup.md).
+
+## 2. Structure
+
+See [references/structure.md](references/structure.md).
+
+Golden rules: production code in `src/` (not notebooks), parameters in
+`conf/*.yaml` (not in code), secrets in Vault, data on S3 (`onyxia-storage-s3`).
+
+## 3. Data wrangling
+
+| Volume | Tool |
+|---|---|
+| Small / medium | [pandas](references/data-wrangling.md) |
+| Large, lazy read | [polars scan_parquet](references/data-wrangling.md) |
+| Very large, SQL-style | [duckdb httpfs](references/data-wrangling.md) |
+
+Parquet first, lazy readers first.
+
+## 4. Code quality — run before every commit
+
 ```bash
-uv run ruff format .            # formatting
-uv run ruff check --fix .       # lint + safe fixes
-uv run pytest -q                # tests
-uv run mypy src/                # gradual typing
+uv run ruff format . && uv run ruff check --fix . && uv run pytest -q && uv run mypy src/
 ```
 
-## Data wrangling: the right tool for the data volume
-- **pandas**: comfort, small/medium volumes, rich ecosystem.
-- **polars**: fast DataFrames, *lazy* (`scan_*`) on large volumes.
-- **Parquet rather than CSV**: columnar, compressed, typed. To take advantage
-  of it (column-only reads, *predicate pushdown*), read with **pyarrow.dataset**
-  or **duckdb** rather than loading everything into a `DataFrame`:
-```python
-import pyarrow.dataset as ds, pyarrow.compute as pc
-table = (ds.dataset("data/RP_partitionne", partitioning="hive")
-           .to_table(filter=pc.field("DEPT").isin(["18","36"]), columns=["AGED","IPONDI","DEPT"]))
-df = table.to_pandas()
-```
-```python
-import duckdb
-duckdb.sql("FROM read_parquet('data/RP.parquet') SELECT AGED, SUM(IPONDI) GROUP BY AGED").to_df()
-```
-- **Partition** a Parquet dataset (`pq.write_to_dataset(..., partition_cols=[...])`)
-  when you often filter on a variable. S3 access: `onyxia-storage-s3` skill.
+See [references/code-quality.md](references/code-quality.md).
 
-## Modeling — scikit-learn
-- Encapsulate all preprocessing in a `Pipeline` + `ColumnTransformer`
-  (prevents data leakage, makes the model deployable as a single unit).
-- Split train/valid/test, fix a seed, validate with cross-validation,
-  evaluate with a metric suited to the problem (not just accuracy).
+## 5. Modeling — scikit-learn
+
+- All preprocessing in a `Pipeline` + `ColumnTransformer` (no data leakage).
+- Split train/valid/test, fix seed, cross-validate, metric suited to problem.
 - Track every trial with MLflow (`mlflow-tracking` skill).
 
-## Serving a model — FastAPI
-Expose predictions through a **FastAPI** API (loaded from the MLflow registry),
-then containerize and deploy (`argo-mlops` skill). See the chapter
-"Mettre à disposition un modèle par le biais d'une API" (serving a model
-through an API) in the reference.
+See [references/modeling.md](references/modeling.md).
 
-## Recommended structure
-```
-my-project/
-├── pyproject.toml / uv.lock
-├── src/my_project/        # importable code (data.py, features.py, model.py)
-├── scripts/               # parameterized entry points (train.py, predict.py)
-├── tests/
-├── conf/                  # parameters (YAML), NO secrets
-└── notebooks/             # exploration only (production logic -> src/)
-```
+## 6. Serving — FastAPI
 
-## Principles (from the reference)
-Modular code (short, testable functions), strict separation of code / config /
-data (Git ≠ data storage → everything on S3), parameterized paths never hard-coded,
-notebooks reserved for exploration. Git is essential — `.gitignore`, commits,
-notebooks: `git-workflow-ds` skill. Publishing results: `quarto-publication`
-skill.
+Expose predictions via FastAPI → containerize → deploy (`argo-mlops`).
+See [references/serving.md](references/serving.md).

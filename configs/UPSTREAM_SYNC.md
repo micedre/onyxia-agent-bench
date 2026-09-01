@@ -5,7 +5,7 @@ sourced from the upstream `opencode-onyxia` repository, so that the ablation lad
 the *real* config data-scientists actually run, not a hand-maintained approximation of it.
 
 - **Upstream repo**: <https://github.com/inseefrlab/opencode-onyxia>
-- **Last synced commit**: `6eff4c7e6ed00ad3af9f4e0ab48a59556ef9ae5b`
+- **Last synced commit**: `39d7071850a6269b7c88a3f9e4ad5dc57333dcd4`
 - **Last synced**: 2026-09-01
 - **Synced verbatim, byte-for-byte at that commit**: `AGENTS.md`, all files under
   `prompts/`, all files under `.opencode/command/`, all files under `.opencode/skills/`

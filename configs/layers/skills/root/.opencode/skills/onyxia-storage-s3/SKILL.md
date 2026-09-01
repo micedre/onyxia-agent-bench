@@ -8,61 +8,52 @@ license: MIT
 
 The datalab uses **MinIO** (Amazon S3-compatible API). Credentials are injected
 automatically into the service at creation time — **never hardcode them**.
-SSP Cloud MinIO endpoint: `https://minio.lab.sspcloud.fr`.
 
-## Golden rules
-1. **Never hardcode credentials** — always read the injected `AWS_*`
-   environment variables.
-2. **Do not download files into the container**: ingest data directly
-   in memory / lazily from S3 (`s3fs`, `arrow`, `duckdb`). Only copy
-   locally (`aws s3 cp`) if a tool truly requires a file on disk.
-3. **Parquet first**: prefer Parquet + lazy readers (duckdb, polars,
-   arrow) — column pruning and predicate pushdown mean only the useful
-   data reaches memory.
-4. The `diffusion/` folder at the root of a bucket is **readable by all
-   authenticated users** (sharing / collaboration / reproducibility
-   mechanism).
+> **Golden rule**: **don't download files into the container**. Ingest data
+> directly in memory / lazily from S3 (`s3fs`, `arrow`, `duckdb`). Only copy
+> locally (`aws s3 cp`) if a tool truly requires a file on disk.
 
-## Injected environment variables
-- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`
-  — temporary S3/MinIO token
-- `AWS_DEFAULT_REGION` — region (usually `us-east-1` on MinIO)
-- `AWS_S3_ENDPOINT` — MinIO host only, no scheme (e.g. `minio.lab.sspcloud.fr`)
+## 1. Check your environment before anything else
 
-Personal bucket = SSP Cloud username. Careful: on pods, `$USERNAME` is the
-generic `onyxia` user — the real username is in `$VAULT_TOP_DIR` (or
-`$KUBERNETES_NAMESPACE` minus its `user-` prefix). Token is valid for **7 days**.
+1. Verify `AWS_ACCESS_KEY_ID` and `AWS_S3_ENDPOINT` are set:
+   ```bash
+   echo "$AWS_ACCESS_KEY_ID" / "$AWS_S3_ENDPOINT"
+   ```
+2. If they are empty → token expired or service never launched → see
+   [references/troubleshooting.md](references/troubleshooting.md).
 
-## First-hypothesis diagnostic: 403 = expired token
-A **403 / AccessDenied / ExpiredToken** error on MinIO almost always means
-the 7-day S3 token has expired (the service also shows red in "My services").
-Suspect expiration **before any other diagnosis**. Remedies:
-- Renew credentials from the Onyxia console: **"My account" → "Connect to
-  storage"** page (fresh tokens to re-export), or
-- Save code/data and **relaunch the service** (a new service gets a fresh
-  token).
+See [references/env.md](references/env.md) for the full list of injected
+variables and how to find your bucket name.
 
-Other frequent pitfalls:
-- **Endpoint**: always `https://$AWS_S3_ENDPOINT` — a URL without the
-  scheme fails.
-- **region**: with MinIO, use `region = ""` (R) to avoid spurious AWS
-  region resolution.
+## 2. Pick the right tool for the job
 
-## Recipes — where to look
+| Task | Tool | Go to |
+|---|---|---|
+| Read / write DataFrames | s3fs (Python), aws.s3 (R) | [references/python.md](references/python.md) / [references/r.md](references/r.md) |
+| Lazy read + filter large Parquet > 1 GB | polars `scan_parquet`, duckdb httpfs, pyarrow.dataset | [references/python.md](references/python.md) / [references/r.md](references/r.md) |
+| List, copy, sync files | `aws s3`, `mc` | [references/cli.md](references/cli.md) |
+| Validate credentials / token expiry | see [references/troubleshooting.md](references/troubleshooting.md) | — |
 
-| Need | Go to |
-|---|---|
-| Python recipes (s3fs, polars `scan_parquet`, duckdb httpfs, pyarrow) | [references/python.md](references/python.md) |
-| R recipes (duckdb + secrets, aws.s3, arrow) | [references/r.md](references/r.md) |
-| CLI recipes (`aws s3`, `mc`) | [references/cli.md](references/cli.md) |
-| Automated diagnostic | run [scripts/check_s3.sh](scripts/check_s3.sh) |
+## 3. Parquet first
 
-## Sharing / collaboration
-Dropping files under `s3://<bucket>/diffusion/` makes them readable by
-everyone. For a collaborative project, agree on one member's bucket and put
-the data in its `diffusion/` folder; production code stays on Git.
+Prefer Parquet + lazy readers (duckdb, polars, arrow) for large volumes — column
+pruning and *predicate pushdown* mean only the useful data reaches memory.
+
+## 4. Sharing with diffusion/
+
+Files under `s3://<bucket>/diffusion/` are readable by all authenticated
+users. See [references/sharing.md](references/sharing.md).
+
+## 5. Troubleshooting
+
+| Symptom | First suspect | See |
+|---|---|---|
+| 403 / AccessDenied | Expired 7-day token | [references/troubleshooting.md](references/troubleshooting.md) |
+| Endpoint works for listing but not writes | missing `https://` scheme | [references/troubleshooting.md](references/troubleshooting.md) |
+| R region resolution error | must use `region = ""` | [references/troubleshooting.md](references/troubleshooting.md) |
 
 ## References
+
 - docs.sspcloud.fr/content/storage.html
 - "Python pour la data science" (L. Galiana), Parquet & cloud chapter:
   pythonds.linogaliana.fr/content/manipulation/05_parquet_s3.html
