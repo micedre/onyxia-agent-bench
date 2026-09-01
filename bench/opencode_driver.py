@@ -164,8 +164,10 @@ class RealOpenCodeDriver(BaseDriver):
 class PodOpenCodeDriver(BaseDriver):
     """Isolation par Job/pod Kubernetes ephemere : le systeme de fichiers du conteneur est
     la frontiere d'isolation (rien d'autre que le workspace pousse n'y existe), contrairement
-    a RealOpenCodeDriver qui partage le systeme de fichiers de l'hote. Sequentiel (un
-    Job a la fois) - la parallelisation est un suivi delibere, pas construite ici.
+    a RealOpenCodeDriver qui partage le systeme de fichiers de l'hote. Safe a appeler en
+    concurrence (bench/runner.py le fait via --workers) : aucun etat mutable partage entre
+    appels si ce n'est `_counter`, deja atomique en CPython (et combine a un uuid pour le
+    nom du Job).
 
     `run()` ne leve jamais : toute defaillance (pod pas Ready, binaire manquant, exec en
     echec/timeout) est encodee dans le RunResult retourne, comme RealOpenCodeDriver le fait

@@ -126,13 +126,13 @@ def cmd_run(args):
               "(pip install mlflow pour l'activer)")
 
     print(f"driver={driver.name} model={args.model} seeds={args.seeds} "
-          f"tasks={task_ids} configs={config_ids}")
+          f"workers={args.workers} tasks={task_ids} configs={config_ids}")
     print(f"sortie -> {out_dir}\n")
 
     try:
         from bench.runner import run_benchmark
         summary = run_benchmark(tasks, configs, base, CONFIGS_DIR, args.model, args.seeds,
-                                driver, out_dir, logger)
+                                driver, out_dir, logger, workers=args.workers)
     finally:
         if cleanup:
             cleanup()
@@ -159,6 +159,13 @@ def main(argv=None):
     pr.add_argument("--configs", default="C0,C4", help="ids de config, ex. C0,C4")
     pr.add_argument("--model", default="onyxia/qwen3-6-35b-moe", help="provider/model pour opencode")
     pr.add_argument("--seeds", type=int, default=3)
+    pr.add_argument("--workers", type=int, default=4,
+                    help="cellules executees en parallele (defaut : 4). Chaque worker "
+                         "correspond a un process `opencode` concurrent (ou, en "
+                         "--isolation pod, un Job/pod k8s concurrent en plus de son "
+                         "cout en ressources - dimensionner avec --pod-cpu-request/"
+                         "--pod-mem-request x --workers face au quota du namespace) "
+                         "et sollicite le endpoint LLM partage en proportion")
     pr.add_argument("--dry-run", action="store_true", help="driver mock (sans vrai modele)")
     pr.add_argument("--isolation", choices=["process", "pod"], default="process",
                     help="process = sous-processus local (defaut) ; "

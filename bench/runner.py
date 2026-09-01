@@ -1,10 +1,23 @@
-"""Orchestrateur sequentiel : pour chaque (task x config x seed), isole, execute, note."""
+"""Orchestrateur : pour chaque (task x config x seed), isole, execute, note.
+
+Les cellules sont independantes (repertoire/pod dedie chacune) et executees en parallele
+via un ThreadPoolExecutor (`workers`) - adapte ici puisque le cout dominant par cellule est
+l'appel agent (subprocess `opencode`, ou cycle de vie complet d'un Job k8s), domine par de
+l'attente I/O qui libere le GIL. Seule la finalisation d'une cellule (bookkeeping +
+`logger.log_cell` + affichage) est serialisee derriere un verrou : `MlflowLogger.log_cell`
+s'appuie sur l'API "fluent" de mlflow (`mlflow.start_run(nested=True)`), qui empile les runs
+actifs dans un etat global non concu pour des creations de runs enfants concurrentes - plus
+simple et plus sur de ne jamais l'appeler en parallele que de la reecrire avec `MlflowClient`
+(run_id explicite partout), vu que cette etape est de toute facon rapide face au cout de
+l'appel agent."""
 from __future__ import annotations
 
 import json
 import shutil
 import statistics
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -133,35 +146,59 @@ def aggregate(records: list[dict], low: str = "C0", high: str = "C4") -> dict:
     }
 
 
+def _build_rec(task_id: str, config_id: str, seed: int, run: RunResult,
+              report: GradeReport, metrics: dict) -> dict:
+    report_dict = report.to_dict()
+    axis_scores = report_dict["axis_scores"]
+    axis_scores["combined"] = combined_score(axis_scores)
+    return {
+        "task": task_id, "config": config_id, "seed": seed,
+        "axis_scores": axis_scores,
+        "checks": report_dict["checks"],
+        "safety_violations": report.safety_violations,
+        "tokens_total": run.transcript.tokens_total,
+        "tool_calls": len(run.transcript.tool_events),
+        "steps": len(run.transcript.events),
+        "wall_clock_s": round(run.wall_clock_s, 3),
+        "metrics": metrics,
+        "error": run.error,
+    }
+
+
 def run_benchmark(tasks: list[TaskSpec], configs: list[ConfigSpec], base: str,
                   configs_dir: Path, model: str, seeds: int, driver: BaseDriver,
-                  out_dir: Path, logger) -> dict:
+                  out_dir: Path, logger, workers: int = 1) -> dict:
     records: list[dict] = []
+    lock = threading.Lock()
+    cells = [(task, config, seed, out_dir / task.id / config.id / f"seed{seed}")
+             for task in tasks for config in configs for seed in range(seeds)]
+
+    def run_and_finalize(task: TaskSpec, config: ConfigSpec, seed: int, cell_dir: Path):
+        try:
+            run, report, ctx = run_cell(task, config, base, configs_dir,
+                                        model, seed, driver, cell_dir)
+            rec = _build_rec(task.id, config.id, seed, run, report, ctx.metrics)
+        except Exception as e:  # une cellule ne doit jamais casser tout le run
+            run = None
+            rec = {
+                "task": task.id, "config": config.id, "seed": seed,
+                "axis_scores": {}, "checks": [], "safety_violations": 0,
+                "tokens_total": 0, "tool_calls": 0, "steps": 0, "wall_clock_s": 0.0,
+                "metrics": {}, "error": f"cell_crashed: {e!r}",
+            }
+        # Seule etape serialisee : le reste (isolation, execution agent, notation) tourne
+        # deja en parallele au-dessus, sans etat partage.
+        with lock:
+            records.append(rec)
+            if run is not None:
+                logger.log_cell(run, report, ctx.metrics, cell_dir)
+            _print_cell(rec)
+
     with logger:
-        for task in tasks:
-            for config in configs:
-                for seed in range(seeds):
-                    cell_dir = out_dir / task.id / config.id / f"seed{seed}"
-                    run, report, ctx = run_cell(task, config, base, configs_dir,
-                                                 model, seed, driver, cell_dir)
-                    report_dict = report.to_dict()
-                    axis_scores = report_dict["axis_scores"]
-                    axis_scores["combined"] = combined_score(axis_scores)
-                    rec = {
-                        "task": task.id, "config": config.id, "seed": seed,
-                        "axis_scores": axis_scores,
-                        "checks": report_dict["checks"],
-                        "safety_violations": report.safety_violations,
-                        "tokens_total": run.transcript.tokens_total,
-                        "tool_calls": len(run.transcript.tool_events),
-                        "steps": len(run.transcript.events),
-                        "wall_clock_s": round(run.wall_clock_s, 3),
-                        "metrics": ctx.metrics,
-                        "error": run.error,
-                    }
-                    records.append(rec)
-                    logger.log_cell(run, report, ctx.metrics, cell_dir)
-                    _print_cell(rec)
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            futures = [pool.submit(run_and_finalize, *cell) for cell in cells]
+            for future in as_completed(futures):
+                future.result()  # relance ici toute exception non-cellule (bug reel)
         low = configs[0].id
         high = configs[-1].id
         summary = aggregate(records, low=low, high=high)

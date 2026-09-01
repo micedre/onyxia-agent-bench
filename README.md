@@ -5,10 +5,11 @@ On mesure **l'apport du contexte, pas le modèle** : mêmes tâches, même modè
 sur une **échelle d'ablation** de configs (C0 nu → C4 config complète), puis on note et on
 loggue les **deltas** dans MLflow.
 
-Version v0 : **séquentielle**, deux modes d'isolation par cellule — **répertoire temporaire +
-git** (`--isolation process`, défaut) ou **Job Kubernetes éphémère** (`--isolation pod`, voir
-plus bas) — et des graders **offline** (fichiers produits + transcript). Un **driver mock**
-(`--dry-run`) permet de valider tout le pipeline sans vrai modèle.
+Version v0 : cellules exécutées **en parallèle** (`--workers`, voir plus bas), deux modes
+d'isolation par cellule — **répertoire temporaire + git** (`--isolation process`, défaut) ou
+**Job Kubernetes éphémère** (`--isolation pod`, voir plus bas) — et des graders **offline**
+(fichiers produits + transcript). Un **driver mock** (`--dry-run`) permet de valider tout le
+pipeline sans vrai modèle.
 
 ## Installation
 
@@ -107,8 +108,34 @@ fuite que ce mode existe pour combler.
 **Limite assumée** : ce mode empêche la fuite de fichiers/identifiants *sans rapport avec la
 tâche* (le dépôt du harnais, `.env`, les fixtures des autres tâches). Il ne protège pas contre
 un agent qui détournerait des identifiants de plateforme *légitimement* fournis pour une tâche à
-notation live (aucune tâche actuelle n'en a besoin). Séquentiel dans cette itération (un Job à
-la fois) — la parallélisation reste un suivi, pas construite ici.
+notation live (aucune tâche actuelle n'en a besoin).
+
+## Exécution en parallèle (`--workers`)
+
+Les cellules sont indépendantes (chacune son répertoire, ou en `--isolation pod` son propre
+Job/pod) et tournent en parallèle via un `ThreadPoolExecutor` (`--workers`, défaut 4). Ça se
+justifie parce que le coût dominant par cellule est l'appel agent lui-même (sous-processus
+`opencode`, ou pour `--isolation pod` tout le cycle de vie d'un Job : création, attente
+ready, push workspace, exec, pull workspace, suppression) — dominé par de l'attente I/O qui
+libère le GIL ; un pool de threads suffit, pas besoin de multiprocessing (et `TaskSpec.grade_fn`,
+chargé dynamiquement via `importlib`, ne se picklerait pas fiablement entre process de toute
+façon). Les drivers (`bench/opencode_driver.py`) n'ont aucun état mutable partagé entre appels
+`.run()` concurrents à part le compteur de nom de Job de `PodOpenCodeDriver`, déjà atomique en
+CPython. Le seul point qui demande attention est `MlflowLogger.log_cell`
+(`bench/mlflow_logging.py`) : il utilise l'API *fluent* de mlflow (`mlflow.start_run(nested=True)`),
+qui garde l'état des runs actifs d'une façon pas prévue pour la création concurrente de runs
+enfants depuis plusieurs threads. Plutôt que de le réécrire avec `MlflowClient` (run_id explicite
+partout), `bench/runner.py` ne l'appelle simplement jamais en concurrence : seule l'étape de
+finalisation d'une cellule (bookkeeping + `logger.log_cell` + affichage) est sérialisée derrière
+un verrou, tandis que l'isolation, l'appel agent et la notation tournent bien en parallèle — le
+logging est rapide face au coût de l'appel agent, donc ça ne coûte rien en pratique.
+
+**Dimensionner `--workers`** : chaque worker est un process `opencode` concurrent — en
+`--isolation pod`, un Job/pod concurrent de plus, avec son propre `--pod-cpu-request`/
+`--pod-mem-request`. Dimensionner `--workers` à la fois par rapport à la capacité du endpoint
+LLM partagé et (en isolation pod) au quota de ressources du namespace : une cellule dont le pod
+ne peut pas être ordonnancé à temps échoue simplement proprement ("pod jamais pret"), ça ne
+casse pas le run.
 
 ## Ajouter un cas de test
 
@@ -181,4 +208,3 @@ dans nos tests jusqu'ici.
 
 - Graders **live** optionnels (vérifier l'objet écrit sur S3, le run MLflow réel).
 - Suite de diagnostic complète (D1–D4) et axe **efficiency** raffiné (contexte always-on).
-- Parallélisation des cellules (`--isolation pod` s'y prête naturellement, un Job par cellule).

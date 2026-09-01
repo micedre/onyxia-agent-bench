@@ -21,3 +21,23 @@ def test_end_to_end_mock(tmp_path):
     assert means["C4"]["functional"] >= means["C0"]["functional"]
     # T01 : platform-correctness doit s'ameliorer nettement avec le contexte
     assert "delta_by_axis" in summary
+
+
+def test_parallel_matches_sequential(tmp_path):
+    """workers>1 doit produire le meme agregat que workers=1 (ordre de completion non
+    deterministe, mais notation/aggregation independantes de cet ordre)."""
+    tasks = discover_tasks(REPO / "tasks")
+    base, configs = load_ladder(REPO / "configs")
+    sel_tasks = [tasks["t10_diag_403"], tasks["t01_s3_parquet"]]
+    sel_configs = [configs["C0"], configs["C4"]]
+
+    seq = run_benchmark(sel_tasks, sel_configs, base, REPO / "configs",
+                        "mock/model", seeds=2, driver=MockOpenCodeDriver(),
+                        out_dir=tmp_path / "seq", logger=NullLogger(), workers=1)
+    par = run_benchmark(sel_tasks, sel_configs, base, REPO / "configs",
+                        "mock/model", seeds=2, driver=MockOpenCodeDriver(),
+                        out_dir=tmp_path / "par", logger=NullLogger(), workers=4)
+
+    assert par["n_cells"] == seq["n_cells"]
+    assert par["mean_by_config"] == seq["mean_by_config"]
+    assert par["delta_by_axis"] == seq["delta_by_axis"]
