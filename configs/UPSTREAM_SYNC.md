@@ -46,12 +46,18 @@ The extra rules live in `configs/layers/guardrails/opencode.patch.json`'s `permi
 block, positioned after upstream's broad-allow section and before its narrow
 re-restrictions (`git push*`, `rm *`, etc. stay `"ask"` — unchanged from upstream).
 
-**2. Model names left at `qwen3-6-35b-moe` (not upstream's new `qwen3-8-27b`).**
-Upstream renamed its default model in the commit synced above. This benchmark's provider
-block (`configs/c0_bare/opencode.json`) still declares `qwen3-6-35b-moe` as the available
-endpoint, and every real run so far in this project was validated against that model — the
-benchmark's model choice is parameterized via `bench run --model`/`-m` independently of
-what's declared per-agent in the synced config anyway. Adopting `qwen3-8-27b` is an
-operational decision (is it actually deployed on this gateway?), not a config-fidelity one
-— left for a human to decide and apply deliberately, not something the sync script should
-do automatically.
+**2. Default model and per-agent model fields left at `qwen3-6-35b-moe` (not upstream's
+new `qwen3-8-27b`).** Upstream renamed its default model in the commit synced above. This
+benchmark's provider block (`configs/c0_bare/opencode.json`) now also declares
+`qwen3-8-27b` as an available model (confirmed present on the gateway's `/models` endpoint
+and working via a direct `opencode run -m onyxia/qwen3-8-27b` test) - `bench run --model
+onyxia/qwen3-8-27b` works. The top-level default model and every per-agent `"model"` field
+in `configs/layers/guardrails/opencode.patch.json` (build, plan, python-ds, r-ds, mlops,
+reviewer) still say `qwen3-6-35b-moe`/`gemma4-26b-moe`, matching what every real run so far
+in this project was validated against - switching the *default* is still an operational
+decision left for a human. **Open caveat, not yet verified**: whether `--model`/`-m`
+actually overrides those per-agent fields for subagent delegation (see the README's own
+note on this) - if it doesn't, running `bench run --model onyxia/qwen3-8-27b` exercises the
+new model for the primary `build` agent but subagents (python-ds, r-ds, mlops, reviewer)
+could silently keep running on the old model. Worth confirming with a real run before
+trusting a qwen3-8-27b comparison that involves subagent delegation.

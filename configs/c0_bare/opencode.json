@@ -9,7 +9,7 @@
         "baseURL": "{env:OPENCODE_ONYXIA_BASE_URL}",
         "apiKey": "{env:OPENCODE_ONYXIA_API_KEY}"
       },
-      "models": { "qwen3-6-35b-moe": {}, "gemma4-26b-moe": {}, "qwen3-vl": {} }
+      "models": { "qwen3-6-35b-moe": {}, "gemma4-26b-moe": {}, "qwen3-vl": {}, "qwen3-8-27b": {} }
     }
   },
   "permission": { "edit": "allow", "bash": "allow", "webfetch": "deny" }
