@@ -6,18 +6,25 @@ run (RunResult), metrics (dict a remplir librement).
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import subprocess
 from pathlib import Path
 
+from bench.configs import LAYER_FILES_MANIFEST
 from bench.schema import Check, Transcript
 
 # --- motifs de secrets / mauvaises pratiques ---
+# Pas de motif "URL minio codee en dur" ici : un hostname n'est pas un secret. Un manifeste
+# qui reference `https://minio.lab.sspcloud.fr` comme endpoint tout en tirant les creds d'un
+# `secretKeyRef` (bonne pratique k8s) faisait echouer ce check a tort - constate sur de vrais
+# runs (t06_argo_pipeline). Les motifs ci-dessous suffisent a attraper une vraie cle/un vrai
+# mot de passe en dur, y compris a cote d'un endpoint minio (cf. _T01_BAD).
 _SECRET_PATTERNS = [
     re.compile(r"AKIA[0-9A-Z]{16}"),                       # cle d'acces AWS
     re.compile(r"(?i)(secret|password|passwd|token)\s*[:=]\s*['\"][^'\"]{6,}['\"]"),
     re.compile(r"(?i)aws_secret_access_key\s*[:=]\s*['\"][^'\"]+['\"]"),
-    re.compile(r"https?://[^\s'\"]*minio[^\s'\"]*"),       # endpoint minio code en dur
 ]
 _DOWNLOAD_PATTERNS = [
     re.compile(r"(?i)download_file\("),
@@ -28,8 +35,37 @@ _DOWNLOAD_PATTERNS = [
 ]
 
 
+def _layer_injected_files(workspace: Path) -> set[Path]:
+    """Chemins deposes par `configs.materialize()` (couches root/ + opencode.json) et encore
+    inchanges - voir LAYER_FILES_MANIFEST. Sans cette exclusion, un `file_exists`/`code_text`
+    par motif (`*.py`, `*.yaml`, ...) matche aussi les scripts/manifestes de reference
+    embarques par une skill (ex. `.opencode/skills/eda-duckdb/scripts/profile_parquet.py`) et
+    peut noter une cellule ou l'agent n'a rien produit comme si son code passait tous les
+    checks (constate sur de vrais runs : functional=1.0 avec
+    files_changed=['AGENTS.md', 'opencode.json']). Compare par hash, pas juste par chemin :
+    un fichier de couche que l'agent a lui-meme modifie reste, a raison, note comme son
+    travail."""
+    manifest_path = workspace / LAYER_FILES_MANIFEST
+    excluded = {manifest_path.resolve()}
+    if not manifest_path.is_file():
+        return excluded
+    try:
+        hashes: dict[str, str] = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return excluded
+    for rel, expected_hash in hashes.items():
+        p = workspace / rel
+        try:
+            if hashlib.sha256(p.read_bytes()).hexdigest() == expected_hash:
+                excluded.add(p.resolve())
+        except OSError:
+            pass
+    return excluded
+
+
 def _git_visible_files(workspace: Path) -> set[Path]:
-    """Fichiers que git considere pertinents (suivis + nouveaux non ignores). Exclut donc
+    """Fichiers que git considere pertinents (suivis + nouveaux non ignores), moins ceux
+    deposes par les couches de config (cf. `_layer_injected_files`). Exclut donc
     automatiquement les caches d'outils avec leur propre .gitignore (.venv via `uv venv`,
     node_modules, etc.) sans liste noire a maintenir a la main - contrairement a un
     `rglob` brut qui balaierait aussi des centaines de fichiers de dependances installees
@@ -43,7 +79,7 @@ def _git_visible_files(workspace: Path) -> set[Path]:
             line = line.strip()
             if line:
                 out.add((workspace / line).resolve())
-    return out
+    return out - _layer_injected_files(workspace)
 
 
 def _iter_files(workspace: Path, patterns: list[str]):
@@ -107,14 +143,24 @@ def env_vars_used(text: str, names: list[str], *, name: str = "reads_env_creds")
                  detail=f"variables lues: {used}")
 
 
+_INTERP_PATTERNS = [
+    re.compile(r"(?i)os\.(getenv|environ)"),        # python
+    re.compile(r"(?i)sys\.getenv\("),                # r
+    re.compile(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"),   # shell/yaml : $VAR, ${VAR}
+]
+
+
 def no_hardcoded_secrets(text: str, *, name: str = "no_hardcoded_secret") -> Check:
     hits = []
     for p in _SECRET_PATTERNS:
         for m in p.finditer(text):
-            # une valeur interpolee (f-string, os.getenv/os.environ) n'est pas "en dur" -
-            # c'est justement le pattern qu'on veut recompenser (cf. env_vars_used), pas un
-            # secret code : ex. `token = '{os.getenv("X")}'` matcherait sinon a tort.
-            if "{" in m.group(0) or re.search(r"(?i)os\.(getenv|environ)", m.group(0)):
+            # une valeur interpolee (f-string python, os.getenv/os.environ, Sys.getenv en R,
+            # $VAR/${VAR} en shell/yaml) n'est pas "en dur" - c'est justement le pattern
+            # qu'on veut recompenser (cf. env_vars_used), pas un secret code : ex.
+            # `token = '{os.getenv("X")}'` ou `secretKey="$AWS_SECRET_ACCESS_KEY"`
+            # (commentaire de manifeste k8s montrant la creation du Secret) matcheraient
+            # sinon a tort - constate sur un run reel (t06_argo_pipeline).
+            if "{" in m.group(0) or any(ip.search(m.group(0)) for ip in _INTERP_PATTERNS):
                 continue
             hits.append(p.pattern)
             break
