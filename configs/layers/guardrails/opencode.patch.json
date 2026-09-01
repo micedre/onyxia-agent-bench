@@ -28,19 +28,6 @@
       "aws s3*": "allow",
       "mlflow *": "allow",
       "duckdb *": "allow",
-      "ls *": "allow",
-      "cat *": "allow",
-      "head *": "allow",
-      "tail *": "allow",
-      "wc *": "allow",
-      "grep *": "allow",
-      "rg *": "allow",
-      "find *": "allow",
-      "mkdir *": "allow",
-      "echo *": "allow",
-      "cd *": "allow",
-      "which *": "allow",
-      "pwd*": "allow",
       "vault kv get*": "allow",
       "vault kv list*": "allow",
       "argo list*": "allow",
@@ -51,6 +38,25 @@
       "kubectl describe*": "allow",
       "kubectl logs*": "allow",
       "kubectl top*": "allow",
+      "ls*": "allow",
+      "cat*": "allow",
+      "head*": "allow",
+      "tail*": "allow",
+      "wc*": "allow",
+      "grep*": "allow",
+      "rg*": "allow",
+      "find*": "allow",
+      "mkdir*": "allow",
+      "echo*": "allow",
+      "cd*": "allow",
+      "which*": "allow",
+      "pwd*": "allow",
+      "sort*": "allow",
+      "test*": "allow",
+      "true*": "allow",
+      "false*": "allow",
+      "mv *": "allow",
+      "R *": "allow",
       "git push*": "ask",
       "git reset --hard*": "ask",
       "git clean*": "ask",
@@ -74,7 +80,7 @@
       "mode": "primary",
       "model": "onyxia/qwen3-6-35b-moe",
       "temperature": 0.2,
-      "prompt": "{file:./.opencode/prompts/shared/base.md}\n\n{file:./.opencode/prompts/build.md}\n\n{file:./.opencode/prompts/shared/completion-contract.md}",
+      "prompt": "{file:./prompts/shared/base.md}\n\n{file:./prompts/build.md}\n\n{file:./prompts/shared/completion-contract.md}",
       "permission": { "edit": "allow" }
     },
     "plan": {
@@ -83,7 +89,7 @@
       "temperature": 0.6,
       "top_p": 0.95,
       "options": { "chat_template_kwargs": { "enable_thinking": true } },
-      "prompt": "{file:./.opencode/prompts/shared/base.md}\n\n{file:./.opencode/prompts/plan.md}",
+      "prompt": "{file:./prompts/shared/base.md}\n\n{file:./prompts/plan.md}",
       "permission": {
         "edit": { "*": "deny", ".opencode/plans/*.md": "allow" },
         "bash": {
@@ -103,7 +109,7 @@
       "description": "Python data science / ML specialist on Onyxia (uv, ruff, polars, pandas, scikit-learn, pyarrow, s3fs). Use to write or refactor Python code for analysis, modelling, or pipelines.",
       "model": "onyxia/qwen3-6-35b-moe",
       "temperature": 0.2,
-      "prompt": "{file:./.opencode/prompts/shared/base.md}\n\n{file:./.opencode/prompts/python-ds.md}\n\n{file:./.opencode/prompts/shared/completion-contract.md}",
+      "prompt": "{file:./prompts/shared/base.md}\n\n{file:./prompts/python-ds.md}\n\n{file:./prompts/shared/completion-contract.md}",
       "permission": { "edit": "allow" }
     },
     "r-ds": {
@@ -111,7 +117,7 @@
       "description": "R data science specialist (tidyverse, data.table, targets, renv, testthat, aws.s3, arrow). Use for any R code for analysis, modelling, or reproducible pipelines.",
       "model": "onyxia/qwen3-6-35b-moe",
       "temperature": 0.2,
-      "prompt": "{file:./.opencode/prompts/shared/base.md}\n\n{file:./.opencode/prompts/r-ds.md}\n\n{file:./.opencode/prompts/shared/completion-contract.md}",
+      "prompt": "{file:./prompts/shared/base.md}\n\n{file:./prompts/r-ds.md}\n\n{file:./prompts/shared/completion-contract.md}",
       "permission": { "edit": "allow" }
     },
     "mlops": {
@@ -119,7 +125,7 @@
       "description": "Onyxia MLOps engineer: MLflow experiment tracking, parallel training via Argo Workflows (argo submit, CronWorkflow), GitOps deployment via ArgoCD, model packaging and productionization. Use to industrialize/deploy a model or schedule recurring jobs.",
       "model": "onyxia/qwen3-6-35b-moe",
       "temperature": 0.2,
-      "prompt": "{file:./.opencode/prompts/shared/base.md}\n\n{file:./.opencode/prompts/mlops.md}\n\n{file:./.opencode/prompts/shared/completion-contract.md}",
+      "prompt": "{file:./prompts/shared/base.md}\n\n{file:./prompts/mlops.md}\n\n{file:./prompts/shared/completion-contract.md}",
       "permission": { "edit": "allow" }
     },
     "reviewer": {
@@ -128,7 +134,7 @@
       "model": "onyxia/gemma4-26b-moe",
       "temperature": 0,
       "steps": 40,
-      "prompt": "{file:./.opencode/prompts/shared/base.md}\n\n{file:./.opencode/prompts/reviewer.md}",
+      "prompt": "{file:./prompts/shared/base.md}\n\n{file:./prompts/reviewer.md}",
       "permission": {
         "edit": "deny",
         "webfetch": "deny",
@@ -193,7 +199,7 @@
       "description": "Visual analysis (vision model): reads screenshots, matplotlib/ggplot charts, architecture diagrams, or dashboards to interpret them or suggest improvements. Use whenever an image is provided.",
       "model": "onyxia/qwen3-vl",
       "temperature": 0.3,
-      "prompt": "{file:./.opencode/prompts/dataviz-vision.md}",
+      "prompt": "{file:./prompts/dataviz-vision.md}",
       "permission": { "edit": "deny", "bash": "deny", "task": "deny", "webfetch": "deny" }
     }
   }
