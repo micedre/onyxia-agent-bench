@@ -13,6 +13,6 @@ def grade(ctx):
     checks.append(file_exists(ctx.workspace, ["ruff.toml", ".ruff.toml", "pyproject.toml"],
                               name="lint_config", axis="functional",
                               needle="ruff"))  # pyproject compte s'il mentionne ruff
-    checks.append(gitignore_blocks(ctx.workspace, ["data", "*.env", ".env"]))
+    checks.append(gitignore_blocks(ctx.workspace, ["data", (".env", "*.env", ".env.*")]))
     checks.append(pytest_passes(ctx.workspace))   # tourne les tests s'il y en a
     return checks
