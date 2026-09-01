@@ -90,7 +90,7 @@ def run_cell(task: TaskSpec, config: ConfigSpec, base: str, configs_dir: Path,
              model: str, seed: int, driver: BaseDriver, cell_dir: Path) -> tuple:
     ws = cell_dir / "ws"
     _init_workspace(ws, task)
-    materialize(config, configs_dir, base, ws)
+    materialize(config, configs_dir, base, ws, model=model)
 
     run: RunResult = driver.run(task, ws, model, seed, config.id)
     _prune_noise(ws)

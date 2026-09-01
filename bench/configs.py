@@ -59,9 +59,25 @@ def _copy_tree(src: Path, dst: Path) -> dict[str, str]:
 # son travail.
 LAYER_FILES_MANIFEST = ".bench_layer_files.json"
 
+# Agents dont le modele n'est jamais ecrase par `model=` : "reviewer" doit rester sur un
+# modele different de celui qu'il note (le but est un second avis independant, pas le
+# modele qui se note lui-meme) ; "dataviz-vision" est fige sur un modele vision - lui
+# imposer le modele texte teste par le run casserait sa seule raison d'etre.
+MODEL_OVERRIDE_EXCLUDE_AGENTS = {"reviewer", "dataviz-vision"}
 
-def materialize(config: ConfigSpec, configs_dir: Path, base: str, workspace: Path) -> Path:
+
+def materialize(config: ConfigSpec, configs_dir: Path, base: str, workspace: Path,
+                model: str | None = None) -> Path:
     """Assemble opencode.json (base + patches) et copie les fichiers des couches.
+
+    Si `model` est fourni, ecrase le "model" de premier niveau et celui de chaque agent
+    (sauf `MODEL_OVERRIDE_EXCLUDE_AGENTS`) par cette valeur. Necessaire car `--model`/`-m`
+    ne s'applique qu'a l'agent primaire invoque par `opencode run` : un agent delegue via
+    le tool `task` (python-ds, r-ds, mlops) tourne sinon sur le modele fige dans sa propre
+    entree "agent" de la config, quel que soit `--model` - ce qui casse la promesse "meme
+    modele sur toute l'echelle" du benchmark des qu'on teste un modele different de celui
+    code en dur dans les couches. Constate empiriquement : un agent `r-ds` delegue restait
+    sur qwen3-6-35b-moe alors que `--model` demandait qwen3-8-27b pour l'agent `build`.
 
     Renvoie le chemin d'opencode.json. Ecrit aussi `LAYER_FILES_MANIFEST` a la racine du
     workspace : {chemin: sha256} des fichiers deposes par les couches (pas produits par
@@ -79,6 +95,15 @@ def materialize(config: ConfigSpec, configs_dir: Path, base: str, workspace: Pat
         patch = ldir / "opencode.patch.json"
         if patch.exists():
             _deep_merge(cfg, json.loads(patch.read_text(encoding="utf-8")))
+
+    if model:
+        if "model" in cfg:
+            cfg["model"] = model
+        for agent_name, agent_cfg in cfg.get("agent", {}).items():
+            if agent_name in MODEL_OVERRIDE_EXCLUDE_AGENTS:
+                continue
+            if isinstance(agent_cfg, dict) and "model" in agent_cfg:
+                agent_cfg["model"] = model
 
     out = workspace / "opencode.json"
     out.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
