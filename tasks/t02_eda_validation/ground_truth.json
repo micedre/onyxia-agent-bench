@@ -1,0 +1,136 @@
+{
+  "n_rows": 1200,
+  "columns": [
+    "code_commune",
+    "nom_commune",
+    "code_departement",
+    "population",
+    "revenu_disponible_median"
+  ],
+  "encoding": "latin-1",
+  "sep": ";",
+  "missing": {
+    "population": 24,
+    "revenu_disponible_median": 42
+  },
+  "placeholders": {
+    "population": 4,
+    "revenu_disponible_median": 20
+  },
+  "out_of_range": {
+    "population": 7,
+    "revenu_disponible_median": 7
+  },
+  "ranges": {
+    "population": [
+      1,
+      3000000
+    ],
+    "revenu_disponible_median": [
+      5000,
+      100000
+    ]
+  },
+  "n_departements": 25,
+  "departements_zero_en_tete": [
+    "01",
+    "02",
+    "06",
+    "07",
+    "09"
+  ],
+  "departements_corse": [
+    "2A",
+    "2B"
+  ],
+  "duplicate_names": [
+    "Saint-Denis",
+    "Sainte-Marie",
+    "Saint-Pierre",
+    "Saint-Martin",
+    "Villeneuve",
+    "La Chapelle",
+    "Saint-Germain",
+    "Montreuil"
+  ],
+  "median_revenu_by_departement": {
+    "01": 21546,
+    "02": 19900.0,
+    "06": 23529,
+    "07": 19358,
+    "09": 19261.0,
+    "13": 21100,
+    "2A": 20719.0,
+    "2B": 19755.0,
+    "31": 22235.5,
+    "33": 22520,
+    "34": 20693,
+    "35": 22812.0,
+    "44": 22278,
+    "59": 19461.5,
+    "62": 19662.0,
+    "67": 22241,
+    "69": 22819.5,
+    "75": 25606.5,
+    "76": 21138.0,
+    "78": 24820,
+    "83": 21434.5,
+    "92": 27596.5,
+    "93": 19431,
+    "94": 22391,
+    "95": 22067.5
+  },
+  "top10_population": [
+    {
+      "code_commune": "75001",
+      "nom_commune": "Paris",
+      "population": 2145906
+    },
+    {
+      "code_commune": "13001",
+      "nom_commune": "Marseille",
+      "population": 873076
+    },
+    {
+      "code_commune": "69001",
+      "nom_commune": "Lyon",
+      "population": 522250
+    },
+    {
+      "code_commune": "31001",
+      "nom_commune": "Toulouse",
+      "population": 498003
+    },
+    {
+      "code_commune": "06001",
+      "nom_commune": "Nice",
+      "population": 348085
+    },
+    {
+      "code_commune": "44001",
+      "nom_commune": "Nantes",
+      "population": 323204
+    },
+    {
+      "code_commune": "34001",
+      "nom_commune": "Montpellier",
+      "population": 299096
+    },
+    {
+      "code_commune": "67001",
+      "nom_commune": "Strasbourg",
+      "population": 291313
+    },
+    {
+      "code_commune": "33001",
+      "nom_commune": "Bordeaux",
+      "population": 260958
+    },
+    {
+      "code_commune": "59001",
+      "nom_commune": "Lille",
+      "population": 236234
+    }
+  ],
+  "seed": 42
+}

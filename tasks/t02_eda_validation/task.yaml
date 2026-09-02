@@ -1,5 +1,5 @@
 id: t02_eda_validation
-tags: [eda, validation, python]
+tags: [eda, validation, python, data-quality]
 timeout_s: 900
 # Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
 # Calibres a 3x la mediane observee de la config nue C0 sur le run de reference
@@ -10,8 +10,15 @@ timeout_s: 900
 budget_tokens: 350000
 budget_s: 240
 prompt: |
-  Le fichier `donnees_insee.csv` (present dans ce repertoire) contient des donnees communales
-  (commune, departement, population, revenu_disponible). Fais une analyse exploratoire (types,
-  valeurs manquantes, distributions cles), puis AVANT toute analyse ajoute une etape de
-  validation explicite des donnees (valeurs manquantes signalees, plages plausibles verifiees
-  pour population et revenu_disponible). Ecris le tout dans un script Python reexecutable.
+  J'ai recu `donnees_insee.csv` (present dans ce repertoire) : des donnees communales avec
+  la population et le revenu disponible median. Avant de m'en servir, j'aimerais savoir si on
+  peut s'y fier, et avoir le revenu disponible median par departement.
+
+  Livrables attendus, produits par un script Python reexecutable :
+  - `validation_report.json` : nombre de lignes, valeurs manquantes par colonne, valeurs
+    aberrantes par colonne (avec la regle utilisee) ;
+  - `revenu_median_departement.csv` : une ligne par departement, colonnes `code_departement`
+    et `revenu_median`.
+
+  Il faudra que ca retourne tel quel la semaine prochaine sur une nouvelle livraison du
+  fichier.
