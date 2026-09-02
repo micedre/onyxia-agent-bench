@@ -1,0 +1,11 @@
+{
+  "columns": [
+    "code_epci",
+    "revenu_moyen_pondere",
+    "nb_menages",
+    "nb_communes"
+  ],
+  "n_rows": 61,
+  "source": "Filosofi 2021",
+  "cog_vintage": "2025"
+}

@@ -1,0 +1,14 @@
+id: t15_outofcore_census
+tags: [parquet, duckdb, out-of-core, s3, platform-correctness]
+timeout_s: 900
+prompt: |
+  Le fichier detail individus du recensement 2020 (schema Insee : IPONDI = poids, AGED = age,
+  DEPT, STOCD = statut d'occupation, ...) est sur le bucket de diffusion :
+  `s3://donnees-insee/diffusion/RP/fd_indcvi_2020.parquet` (~1 Go, 20 M de lignes). Un
+  echantillon au meme schema est ici : `fd_indcvi_2020_sample.parquet`.
+
+  Il me faut, par departement : l'age median pondere par IPONDI, et la part (ponderee)
+  d'individus locataires (STOCD commencant par 2). Sortie `indicateurs_departement.csv`
+  (colonnes `DEPT`, `age_median`, `part_locataires`). Le script doit tourner sur le fichier
+  complet depuis un service avec 4 Go de RAM ; le chemin du fichier est lu dans la variable
+  d'environnement `CENSUS_PATH` (defaut : l'echantillon local).

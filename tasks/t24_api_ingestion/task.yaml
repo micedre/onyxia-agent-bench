@@ -1,0 +1,9 @@
+id: t24_api_ingestion
+tags: [api, ingestion, caching, parquet]
+timeout_s: 900
+prompt: |
+  Il faut recuperer la serie `pop_dep` de l'API statistique decrite dans `API.md`
+  (`mock_stats_api.py` est un serveur local fidele a l'API : lance-le pour tester) et
+  l'ecrire en Parquet dans `data/pop_dep.parquet` avec un script reexecutable. L'API est
+  paginee et lente : le script ne doit pas re-telecharger ce qui n'a pas change quand on le
+  relance. L'URL de base est lue dans `STATS_API_URL`.

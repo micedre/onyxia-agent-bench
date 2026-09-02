@@ -1,0 +1,8 @@
+id: t22_cron_argo
+tags: [argo, mlops, kubernetes, scheduling]
+timeout_s: 900
+prompt: |
+  `publish_revenu_epci.py` recalcule le revenu par EPCI et l'ecrit sur S3 (chemin de sortie
+  en argument, identifiants dans l'env). Je veux que ca tourne automatiquement le 1er de
+  chaque mois sur le cluster de la plateforme, avec le chemin S3 modifiable sans toucher au
+  code du workflow. Prepare ce qu'il faut.

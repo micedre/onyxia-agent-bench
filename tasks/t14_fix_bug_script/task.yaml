@@ -1,0 +1,9 @@
+id: t14_fix_bug_script
+tags: [debugging, pandas, data-quality]
+timeout_s: 900
+prompt: |
+  `agregat.py` sort chaque semaine le revenu median par departement a partir de
+  `donnees_communes.csv`. Un collegue de la direction regionale de Corse dit que ses
+  departements n'apparaissent pas dans `revenu_median_departement.csv`, et l'Ain trouve ses
+  chiffres bizarres. Peux-tu regarder et corriger ? Le script est utilise tel quel par
+  d'autres equipes, evite de tout reecrire.

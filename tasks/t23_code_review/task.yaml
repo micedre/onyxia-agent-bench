@@ -1,0 +1,7 @@
+id: t23_code_review
+tags: [code-review, security, mlops]
+timeout_s: 600
+prompt: |
+  Peux-tu relire la PR #42 (`PR.md`, code dans `src/pipeline.py`) comme tu le ferais pour un
+  collegue, et ecrire ta revue dans `review.md` ? Concentre-toi sur ce qui poserait vraiment
+  probleme sur la plateforme ou pour la fiabilite des resultats, pas sur le style.

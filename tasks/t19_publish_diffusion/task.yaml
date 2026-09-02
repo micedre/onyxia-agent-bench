@@ -1,0 +1,9 @@
+id: t19_publish_diffusion
+tags: [s3, diffusion, documentation, platform-correctness]
+timeout_s: 900
+prompt: |
+  `revenu_epci.csv` est le resultat final (revenu moyen pondere par EPCI, Filosofi 2021 en
+  geographie COG 2025). Publie-le pour les autres utilisateurs de la plateforme, de facon
+  propre et documentee. Comme on n'a pas les droits d'ecriture ici, prepare tout dans un
+  dossier local `publish/` qui reflete exactement ce qui sera envoye, plus le script de
+  publication (qui ne sera lance qu'en revue).

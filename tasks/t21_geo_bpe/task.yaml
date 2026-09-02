@@ -1,0 +1,8 @@
+id: t21_geo_bpe
+tags: [geo, bpe, spatial]
+timeout_s: 900
+prompt: |
+  `bpe23_dep33.csv` est un extrait de la Base permanente des equipements (Gironde, avec
+  TYPEQU et coordonnees) et `communes_centroides_dep33.csv` donne le centroide de chaque
+  commune. Pour chaque commune, combien de pharmacies a moins de 5 km du centroide ?
+  Sortie `pharmacies_5km.csv` (colonnes `code_commune`, `nb_pharmacies`), avec le script.

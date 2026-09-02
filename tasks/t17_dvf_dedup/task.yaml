@@ -1,0 +1,7 @@
+id: t17_dvf_dedup
+tags: [dvf, dedup, data-quality]
+timeout_s: 900
+prompt: |
+  A partir de `dvf_2023_dep33_69.csv` (extrait DVF geolocalise 2023), donne-moi le nombre de
+  ventes d'appartements par commune en 2023, dans `ventes_appartements_commune.csv` (colonnes
+  `code_commune`, `nb_ventes`), avec le script qui le produit.

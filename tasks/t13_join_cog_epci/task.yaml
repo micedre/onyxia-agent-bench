@@ -1,0 +1,12 @@
+id: t13_join_cog_epci
+tags: [join, cog, filosofi, data-quality]
+timeout_s: 900
+prompt: |
+  J'ai `filosofi_communes_2021.csv` (revenu median MED21 et nb de menages fiscaux par
+  commune, geographie 2023) et le COG 2025 (`cog_communes_2025.csv`, avec l'EPCI de chaque
+  commune ; `cog_mouvements_2024_2025.csv` liste ce qui a change entre-temps). Il me faut le
+  revenu median moyen par EPCI, pondere par le nombre de menages.
+
+  Livrables, produits par un script Python reexecutable :
+  - `revenu_epci.csv` : colonnes `code_epci`, `revenu_moyen_pondere` ;
+  - `jointure_report.json` : ce qui n'a pas pu etre apparie tel quel et comment ca a ete traite.

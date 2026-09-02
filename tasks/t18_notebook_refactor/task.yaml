@@ -1,0 +1,8 @@
+id: t18_notebook_refactor
+tags: [notebook, refactoring, reproducibility, security, git]
+timeout_s: 900
+prompt: |
+  `analyse_bas_revenus.ipynb` est le notebook d'un collegue parti en conge : il calcule la
+  part de communes sous un seuil de revenu par departement (`part_communes_sous_seuil.csv`)
+  a partir de `donnees_communes.csv`. Il ne tourne plus de haut en bas. Transforme-le en
+  quelque chose de fiable que l'equipe puisse relancer et tester, et commite le resultat.

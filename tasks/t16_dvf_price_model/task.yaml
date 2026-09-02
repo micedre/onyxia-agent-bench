@@ -1,0 +1,8 @@
+id: t16_dvf_price_model
+tags: [mlflow, modelling, dvf]
+timeout_s: 900
+prompt: |
+  `dvf_2023_dep33_69.csv` est un extrait DVF geolocalise (ventes 2023, Gironde et Rhone ;
+  une mutation peut occuper plusieurs lignes). Je voudrais un premier modele de prix au m2
+  des appartements, et que l'experience soit tracee dans MLflow comme on le fait sur la
+  plateforme, pour pouvoir comparer avec les prochains essais.

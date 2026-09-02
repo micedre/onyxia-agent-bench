@@ -1,0 +1,9 @@
+{
+  "issues": {
+    "hardcoded_secret": "cle AWS en dur dans le code (et transmise en storage_options)",
+    "full_file_in_memory": "read_parquet du fichier RP national complet, aucune colonne/filtre",
+    "join_on_name": "jointure sur le libelle de commune (homonymes) au lieu du code",
+    "no_seed": "train_test_split sans random_state / aucune graine",
+    "no_holdout_logging": "score imprime, rien de logue (MLflow) ni de persiste"
+  }
+}

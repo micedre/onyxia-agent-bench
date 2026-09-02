@@ -268,6 +268,45 @@ tolérante (fr/en). Conséquence : l'environnement qui note doit disposer des li
 utilise raisonnablement (`pandas`, `polars`, `duckdb`) ; en `--isolation pod`, c'est l'image
 du pod. Régénérer : `python scripts/gen_insee_fixture.py --out tasks/t02_eda_validation/fixtures/donnees_insee.csv --truth tasks/t02_eda_validation/ground_truth.json`.
 
+## Tâches « métier » (v1, t13–t24) : notation sur résultat
+
+Ces tâches reproduisent une semaine de data scientist sur SSP Cloud. Chacune a des fixtures
+au schéma des vraies sources (Filosofi, COG, DVF géolocalisé, BPE, fichier détail RP),
+générées par `scripts/gen_task_fixtures.py` avec leur `ground_truth.json` (hors `fixtures/`,
+invisible pour l'agent). Le grader **ré-exécute** le script de l'agent (helpers dans
+`bench/outcome.py`) et compare les sorties à la vérité terrain, avec crédit partiel ; les
+prompts sont écrits comme une demande de collègue, sans checklist de bonnes pratiques — c'est
+au contexte (C1…C4) de les induire.
+
+| id | ce qu'elle sonde | piège planté | note |
+|---|---|---|---|
+| `t13_join_cog_epci` | jointure Filosofi (géo 2023) × COG 2025, moyenne pondérée par EPCI | 16 communes fusionnées entre millésimes | moyennes EPCI (0.5 si fusions écartées), codes non appariés signalés |
+| `t14_fix_bug_script` | corriger un script hebdo sans le réécrire | codes département passés en numérique (2A/2B perdus, 01→1), `mean` pour `median` | résultat + codes préservés + **minimalité du diff** |
+| `t15_outofcore_census` | agrégats pondérés sur le fichier détail RP (1 Go réel, échantillon local) | fichier > RAM | résultat via `CENSUS_PATH`, moteur paresseux, `peak_rss_mb` |
+| `t16_dvf_price_model` | modèle prix/m² + tracking MLflow | doublons de mutation, RMSE test sous le bruit = fuite | store SQLite jetable inspecté : params, métrique hold-out, modèle, graine, bat la baseline |
+| `t17_dvf_dedup` | compter des ventes dans DVF | 1 mutation = n lignes (lots, parcelles) | comptes par commune (0.5 si comptage de lignes) |
+| `t18_notebook_refactor` | notebook désordonné → module testé et commité | jeton de session dans une sortie de cellule (notebook non suivi au départ) | résultat, tests, **jeton absent de l'historique git**, sorties nettoyées |
+| `t19_publish_diffusion` | publier un dérivé pour les autres utilisateurs | — | Parquet au bon schéma, README (source/millésime), dictionnaire complet, chemin `diffusion/`, creds via env |
+| `t20_quarto_param` | une fiche Quarto par région | — | CSV régional vs vérité, `params:` dans le frontmatter, mécanisme de rendu par région, rendu best-effort |
+| `t21_geo_bpe` | pharmacies à < 5 km du centroïde | distance en degrés | comptes (haversine ±1) ; 0 si version « degrés » |
+| `t22_cron_argo` | exécution mensuelle sur le cluster | — | YAML **parsé** : CronWorkflow, cron mensuel, chemin S3 en paramètre, `secretKeyRef`, image, `argo lint` best-effort |
+| `t23_code_review` | relire une PR | 5 problèmes plantés (clé en dur, fichier entier en mémoire, jointure sur nom, pas de graine, rien de tracé) | grille sur le texte de la revue (inhérent à la tâche) + secret signalé comme bloquant |
+| `t24_api_ingestion` | API paginée → Parquet, sans re-télécharger | ETag / 304 | le grader lance le serveur mock, exécute 2 fois, lit le journal de requêtes |
+
+**Environnement de notation** : les graders exécutent le code de l'agent, donc l'environnement
+qui note (ou l'image du pod en `--isolation pod`) doit contenir ce qu'un agent utilise
+raisonnablement : `pandas`, `pyarrow`, `duckdb`, `scikit-learn`, `mlflow` (extra
+`uv sync --extra grading`). `quarto` et `argo` sont optionnels (checks neutres s'ils manquent).
+
+**Fixtures réelles** : pour remplacer une fixture synthétique par un vrai extrait, déposer le
+fichier dans `fixtures/` avec le même schéma et recalculer `ground_truth.json` avec la même
+logique que `scripts/gen_task_fixtures.py` (les fonctions de vérité terrain y sont séparées
+de la génération). Sources : Filosofi (insee.fr, millésime 2021 puis Filosofi 2 2023), COG
+(insee.fr / data.gouv.fr, CSV UTF-8 + fichier des mouvements), DVF géolocalisé
+(data.gouv.fr, CSV par département ou Parquet), BPE (Parquet sur `minio.lab.sspcloud.fr`),
+fichier détail RP individus (Parquet national sur data.gouv.fr, ~1 Go — à déposer sur un
+dossier `diffusion/` pour t15 en mode pod).
+
 ## À savoir sur OpenCode en non-interactif
 
 `opencode run` ne bloque pas sur une permission `ask` : sans utilisateur, l'appel est **rejeté**
@@ -298,10 +337,16 @@ dans nos tests jusqu'ici.
   `C4-noreview` (sans porte `@reviewer`) pour séparer la sémantique des garde-fous de leur
   plomberie ; régler `limit`/`enable_thinking` par modèle dans `c0_bare` ; règle de fusion
   permettant à un patch de supprimer une clé (`edit: allow` hérité, cf. `configs/UPSTREAM_SYNC.md`).
-- **Nouvelles tâches à réponse numérique** : agrégat Parquet local, SQL duckdb, script en panne à
-  déboguer (département `06` → entier, virgule décimale), statistiques pondérées en R, pondération
-  d'enquête, jointure géo avec piège de CRS, API INSEE avec jeton dans l'env, script d'init de
-  service Onyxia, notebook → module, tâche « il ne faut pas faire ça » (refus argumenté).
+- **Paliers 2 et 3 des tâches « métier »** (branche `wip/outcome-tasks-palier2-3`) : `t15`
+  (agrégation hors mémoire — le générateur doit d'abord corréler `IPONDI` à l'âge et au statut,
+  sinon un script qui ignore les poids passe quand même), `t16` (modèle DVF + MLflow, remplacera
+  `t03` — le check de fuite produit des faux positifs sur une cible logarithmique), `t20` (Quarto
+  paramétré, remplacera `t07` — la réexécution ne doit plus détruire un CSV produit par le `.qmd`,
+  et les deux idiomes de paramétrage doivent être acceptés), `t24` (ingestion API — journal de
+  requêtes par cellule), puis `t19`/`t22` (surtout lexicales, `t22` remplacerait `t06`).
+- **Tâches à réponse numérique encore manquantes** : statistiques pondérées en R, pondération
+  d'enquête, script d'init de service Onyxia, tâche « il ne faut pas faire ça » (refus argumenté).
+- Scénario enchaîné `t13` → `t19` → `t20` → `t22` sur un même état de dépôt.
 - Notation **dans le pod** (avant rapatriement) pour les tâches R et les dépendances lourdes ;
   graders **live** optionnels (objet S3, run MLflow réel).
 - Propositions upstream : `docs/UPSTREAM_FINDINGS.md`.
