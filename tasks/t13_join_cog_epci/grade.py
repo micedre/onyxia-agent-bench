@@ -7,7 +7,7 @@ import re
 from bench.grading import code_text, no_hardcoded_secrets
 from bench.outcome import (
     Check,
-    compare_keyed,
+    compare_with_alternatives,
     find,
     json_strings,
     keyed_values,
@@ -33,13 +33,11 @@ def grade(ctx):
     p = find(rws, OUT[0])
     if p:
         got = keyed_values(read_table(p), [r"epci"], [r"revenu|moyen|median|mean"])
-        full = compare_keyed(got, T["revenu_epci_resolved"], name="epci_means_resolved",
-                             rel_tol=0.002)
-        dropped = compare_keyed(got, T["revenu_epci_if_merged_dropped"], name="_", rel_tol=0.002)
-        if full.score < 0.99 and dropped.score > full.score:
-            full = Check("epci_means_resolved", False, round(0.5 * dropped.score, 4),
-                         detail=f"correspond a la version 'fusions ecartees' ({dropped.detail})")
-        full.weight = 2.0
+        full = compare_with_alternatives(
+            got, T["revenu_epci_resolved"],
+            {"communes fusionnees ecartees, pas resolues":
+                T["revenu_epci_if_merged_dropped"]},
+            name="epci_means_resolved", rel_tol=0.002, weight=2.0)
         checks.append(full)
     else:
         checks.append(Check("epci_means_resolved", False, 0.0, weight=2.0,

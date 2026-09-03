@@ -112,3 +112,24 @@ def test_compare_keyed_absolute_tolerance(truth, got, tol, expected):
     c = outcome.compare_keyed(got, truth, name="x", rel_tol=0.0, abs_tol=tol,
                               alt_key=lambda k: k.lstrip("0"))
     assert c.score == expected
+
+
+def test_reexecute_names_a_hardcoded_workdir(make_ws):
+    """Un script qui code en dur `/tmp/bench-cell` (le repertoire de travail dans le pod) ne
+    tourne nulle part ailleurs : le score reste 0, mais la cause doit etre lisible dans le
+    rapport sans ouvrir la cellule."""
+    ws = make_ws({"run.py": "open('/tmp/bench-cell/data.csv').read()\n",
+                  "out.csv": "k,v\nA,1\n"})
+    chk, info = outcome.reexecute(ws, ["out.csv"], timeout=60)
+    assert not chk.passed
+    assert "/tmp/bench-cell" in chk.detail and "code en dur" in chk.detail
+    assert info["ws"] == ws and (ws / "out.csv").is_file()
+
+
+def test_reexecute_distinguishes_no_script_from_broken_script(make_ws):
+    no_script = outcome.reexecute(make_ws({"out.csv": "k,v\n"}), ["out.csv"], timeout=60)[0]
+    assert "aucun script" in no_script.detail
+
+    broken = outcome.reexecute(make_ws({"run.py": "raise KeyError('LIBGEO')\n"}),
+                               ["out.csv"], timeout=60)[0]
+    assert "ne regenere pas" in broken.detail and "LIBGEO" in broken.detail

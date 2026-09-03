@@ -91,13 +91,21 @@ class RunResult:
     agent_s: float = 0.0   # duree de l appel agent seul (== wall_clock_s en mode process)
 
 
-# Statuts de cellule. Seuls "ok" et "timeout" comptent dans les moyennes : dans les deux cas
-# l'agent a effectivement tourne (un timeout est un echec de l'agent dans le budget imparti).
-# "never_ran" (pod jamais pret, binaire absent...), "oom" et "error" sont des defaillances
-# d'infrastructure/harnais : elles sont comptees a part (bloc "reliability") et exclues des
-# moyennes, sinon un run dont le cluster sature en fin d'execution attribue des zeros a la
-# derniere tache traitee, ce qui est arrive sur de vrais runs (t10 = 15/15 cellules perdues).
-VALID_STATUSES = ("ok", "timeout")
+# Statuts de cellule. Comptent dans les moyennes tous les cas ou L'AGENT A REELLEMENT TOURNE :
+# "ok", "timeout" (echec dans le budget imparti) et "agent_error" (le CLI rend un code non nul
+# mais l'agent a produit des tours et des tokens - typiquement opencode qui sort en 1 apres des
+# rejets de permission automatiques, alors que le travail est complet et correct).
+# Sont exclus "never_ran" (pod jamais pret, binaire absent, modele qui refuse l'appel d'outil :
+# aucun tour, aucun token), "oom" et "error" : ce sont des defaillances d'infrastructure ou du
+# harnais, pas des resultats d'agent.
+#
+# Les deux exclusions comptent autant l'une que l'autre. Compter une defaillance d'infra comme
+# un echec de l'agent attribuait des zeros a la derniere tache d'un run ou le cluster saturait
+# (t10 = 15/15 cellules perdues). Mais exclure une cellule complete parce que le CLI a rendu 1
+# fait l'erreur symetrique : sur un run reel, une cellule C4 a 1.00 partout a ete ecartee apres
+# huit rejets de permission, et comme ce sont les garde-fous de C4 qui provoquent ces rejets,
+# l'exclusion penalisait justement la config mesuree (C4 publie a 0.750 au lieu de 0.800).
+VALID_STATUSES = ("ok", "timeout", "agent_error")
 
 
 def cell_status(run: RunResult) -> str:
@@ -107,8 +115,11 @@ def cell_status(run: RunResult) -> str:
         return "timeout"
     if run.exit_code == 137:
         return "oom"
-    if not run.transcript.events and run.transcript.tokens_total == 0:
+    t = run.transcript
+    if not t.events and t.tokens_total == 0:
         return "never_ran"
+    if t.assistant_turns > 0 and t.tokens_total > 0:
+        return "agent_error"
     return "error"
 
 

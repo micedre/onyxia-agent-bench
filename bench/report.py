@@ -18,7 +18,7 @@ AXIS_LABELS = {
 }
 
 COLUMNS = AXES + ["combined"]
-STATUS_ORDER = ["ok", "timeout", "never_ran", "oom", "error"]
+STATUS_ORDER = ["ok", "timeout", "agent_error", "never_ran", "oom", "error"]
 
 
 def _fmt(v) -> str:
@@ -119,9 +119,11 @@ def render_markdown(summary: dict, meta: dict) -> str:
 
     out.append("## Fiabilite du run (a lire AVANT les scores)")
     out.append("")
-    out.append("Seules les cellules `ok` et `timeout` (l'agent a tourne) entrent dans les "
-               "moyennes. `never_ran`/`oom`/`error` sont des defaillances d'infrastructure ou "
-               "du harnais, comptees ici et exclues des scores.")
+    out.append("Entrent dans les moyennes toutes les cellules ou l'agent a reellement tourne : "
+               "`ok`, `timeout` (echec dans le budget) et `agent_error` (le CLI rend un code non "
+               "nul mais l'agent a produit des tours et des tokens - on note ce qu'il a livre). "
+               "`never_ran` (aucun tour ni token), `oom` et `error` sont des defaillances "
+               "d'infrastructure ou du harnais : comptees ici, exclues des scores.")
     out.append("")
     if reliability:
         headers = ["config", "cellules", "valides"] + STATUS_ORDER + ["taux timeout"]

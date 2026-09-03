@@ -203,10 +203,35 @@ res.to_csv("revenu_median_departement.csv", index=False)
 print(res)
 ''', encoding="utf-8")
     by_dep: dict[str, list] = {}
+    pairs_by_dep: dict[str, list] = {}
     for c in com:
         by_dep.setdefault(c["dep"], []).append(c["rev"])
+        pairs_by_dep.setdefault(c["dep"], []).append((c["rev"], c["pop"]))
+
+    def weighted_mean(pairs):
+        tot = sum(w for _, w in pairs)
+        return round(sum(v * w for v, w in pairs) / tot, 1) if tot else None
+
+    def weighted_median(pairs):
+        """Mediane ponderee : premiere valeur dont le cumul des poids atteint la moitie."""
+        ordered = sorted(pairs)
+        half = sum(w for _, w in ordered) / 2
+        cum = 0.0
+        for v, w in ordered:
+            cum += w
+            if cum >= half:
+                return float(v)
+        return None
+
+    # `buggy_*` et `weighted_*` ne sont pas la verite : ce sont des reponses FAUSSES nommees,
+    # que le grader compare pour dire *pourquoi* une cellule echoue au lieu d'afficher
+    # "0/13 ok". Constate sur un run reel : trois cellules avaient invente une ponderation par
+    # la population (moyenne ou mediane) et une avait garde la moyenne d'origine - quatre
+    # diagnostics impossibles a distinguer sans ouvrir les workspaces.
     write_truth(task, {"median_by_dep": {d: statistics.median(v) for d, v in by_dep.items()},
                        "buggy_mean_by_dep": {d: round(statistics.mean(v)) for d, v in by_dep.items()},
+                       "weighted_mean_by_dep": {d: weighted_mean(v) for d, v in pairs_by_dep.items()},
+                       "weighted_median_by_dep": {d: weighted_median(v) for d, v in pairs_by_dep.items()},
                        "fragile_codes": [d for d in by_dep if d[0] == "0" or d in ("2A", "2B")],
                        "n_communes": len(com)})
 

@@ -3,7 +3,7 @@
 donne le meme compte a +/-1 pres, d'ou abs_tol=1)."""
 from bench.outcome import (
     Check,
-    compare_keyed,
+    compare_with_alternatives,
     find,
     keyed_values,
     load_truth,
@@ -24,9 +24,10 @@ def grade(ctx):
     if not p:
         return checks + [Check("counts_correct", False, 0.0, weight=2.0, detail="sortie absente")]
     got = keyed_values(read_table(p), [r"commune|code"], [r"nb|pharm|count|n_"])
-    good = compare_keyed(got, T["pharmacies_within_5km"], name="counts_correct", abs_tol=1.0)
-    naive = compare_keyed(got, T["naive_degrees_count"], name="_", abs_tol=0.5)
-    if good.score < 0.99 and naive.score > 0.9:
-        good = Check("counts_correct", False, 0.0, detail="distance en degres, pas en km")
-    good.weight = 2.0
+    # `zero_above` : mesurer en degres revient a dire "tout est a moins de 5", ce n'est pas une
+    # reponse partiellement juste - aucun credit, contrairement aux autres alternatives.
+    good = compare_with_alternatives(
+        got, T["pharmacies_within_5km"],
+        {"distance en degres, pas en km": T["naive_degrees_count"]},
+        name="counts_correct", abs_tol=1.0, weight=2.0, zero_above=0.9)
     return checks + [good]

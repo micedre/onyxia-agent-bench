@@ -152,20 +152,44 @@ def test_t14_second_bug_is_actually_measured(tmp_path):
     """Le fichier s'appelle `revenu_median_departement.csv` mais le script calcule une
     moyenne. Avec la tolerance relative de 1 % d'origine, cet ecart restait sous le seuil dans
     9 departements sur 13 : corriger le seul bug de type notait 0.69 et ne rien corriger 0.54.
-    La comparaison est desormais absolue (+/-1 EUR), donc le second bug se voit."""
+    La comparaison est desormais absolue (+/-1 EUR), et la moyenne est une alternative NOMMEE :
+    credit plafonne a 0.5, cause affichee."""
     task = "t14_fix_bug_script"
     ws_partial = workspace(tmp_path, task, {})
     _t14_fix(ws_partial, dtype=True, median=False)
-    partial = scores(task, ws_partial)
+    partial = _checks(task, ws_partial)
+    partial_s = {c.name: c.score for c in partial}
 
     ws_full = workspace(tmp_path, task, {})
     _t14_fix(ws_full, dtype=True, median=True)
     full = scores(task, ws_full)
 
     assert full["medians_correct"] == 1.0
-    assert partial["dept_codes_preserved"] == 1.0, "le premier bug est bien corrige"
-    assert partial["medians_correct"] <= 0.1, (
-        f"la moyenne doit etre distinguee de la mediane (obtenu {partial['medians_correct']})")
+    assert partial_s["dept_codes_preserved"] == 1.0, "le premier bug est bien corrige"
+    assert partial_s["medians_correct"] <= 0.5, "la moyenne n'est pas la mediane"
+    assert partial_s["medians_correct"] < full["medians_correct"]
+    cause = next(c.detail for c in partial if c.name == "medians_correct")
+    assert "moyenne simple" in cause, f"la cause doit etre nommee (obtenu : {cause})"
+
+
+def test_t14_names_the_invented_weighting(tmp_path):
+    """Trois cellules d'un run reel avaient invente une ponderation par la population (moyenne
+    ou mediane ponderee etiquetee `revenu_median`). Le detail doit nommer laquelle, sinon le
+    diagnostic demande d'ouvrir le workspace."""
+    import json as _json
+    task = "t14_fix_bug_script"
+    truth = _json.loads((TASKS / task / "ground_truth.json").read_text(encoding="utf-8"))
+    for key, expected in (("weighted_mean_by_dep", "moyenne ponderee"),
+                          ("weighted_median_by_dep", "mediane ponderee")):
+        ws = workspace(tmp_path, task, {})
+        rows = "\n".join(f"{d},{v}" for d, v in truth[key].items())
+        (ws / "agregat.py").write_text(
+            "open('revenu_median_departement.csv', 'w').write("
+            f"'code_departement,revenu_median\\n' + {rows!r} + '\\n')\n")
+        checks = _checks(task, ws)
+        by = {c.name: c for c in checks}
+        assert by["medians_correct"].score <= 0.5
+        assert expected in by["medians_correct"].detail, by["medians_correct"].detail
 
 
 # --------------------------------------------------------------------------- t15

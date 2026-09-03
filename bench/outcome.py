@@ -111,8 +111,8 @@ def reexecute(ws: Path, outputs: list[str], *, name: str = "script_reexecutes",
 
     scripts = candidate_scripts(rerun, exts, exclude_names)
     if not scripts:
-        return (Check(name, False, 0.0, axis=axis, detail=f"aucun script {list(exts)}"),
-                {"ws": ws})
+        return (Check(name, False, 0.0, axis=axis,
+                      detail=f"aucun script {list(exts)} : rien a reexecuter"), {"ws": ws})
     info: dict = {}
     tried = []
     for script in scripts[:max_candidates]:
@@ -124,9 +124,33 @@ def reexecute(ws: Path, outputs: list[str], *, name: str = "script_reexecutes",
                          detail=f"{info['script']} : {info['detail']}"), info
     missing = [o for o in outputs if not find(rerun, o)]
     info["ws"] = ws  # repli : on note ce que l'agent a livre, sans le detruire
+    cause = _diagnose_rerun_failure(rerun, scripts[:max_candidates], tried)
     return (Check(name, False, 0.0, axis=axis,
-                  detail=f"livrables manquants apres reexecution {missing} ; essais: {tried}"),
-            info)
+                  detail=f"{cause} ; livrables manquants {missing}"), info)
+
+
+#: Repertoires de travail dans lesquels l'agent tourne, mais qui n'existent plus a la notation.
+#: Un script qui code l'un d'eux en dur ne tourne nulle part ailleurs.
+_EXEC_WORKDIRS = ("/tmp/bench-cell",)
+
+
+def _diagnose_rerun_failure(rerun: Path, scripts: list[Path], tried: list[str]) -> str:
+    """Nomme la cause d'un echec de reexecution.
+
+    Le score reste 0 dans tous les cas - un script qui ne tourne qu'a un chemin absolu n'est
+    pas reproductible - mais sans cette distinction un lecteur ne peut pas separer "defaut du
+    livrable" de "bug du harnais" sans ouvrir la cellule.
+    """
+    for script in scripts:
+        try:
+            txt = script.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        hit = next((w for w in _EXEC_WORKDIRS if w in txt), None)
+        if hit:
+            return (f"chemin absolu du repertoire d'execution code en dur ({hit}) dans "
+                    f"{script.name} : le script ne tourne que la ou l'agent l'a ecrit")
+    return f"le script ne regenere pas les livrables ; essais: {tried}"
 
 
 # --------------------------------------------------------------------------- lecture tolerante
@@ -207,6 +231,40 @@ def compare_keyed(got: dict[str, float], truth: dict[str, float], *, name: str,
     s = hits / max(1, len(truth))
     return Check(name, s >= 0.99, s, axis=axis,
                  detail=f"{hits}/{len(truth)} ok" + (f" ; ex. {misses[:3]}" if misses else ""))
+
+
+def compare_with_alternatives(got: dict[str, float], truth: dict[str, float],
+                              alternatives: dict[str, dict[str, float]], *, name: str,
+                              cap: float = 0.5, zero_above: float | None = None,
+                              weight: float = 1.0, axis: str = "functional",
+                              rel_tol: float = 0.01, abs_tol: float = 0.0,
+                              alt_key=lambda k: k) -> Check:
+    """Compare a la verite terrain ET a des reponses fausses NOMMEES.
+
+    Sans ca, une reponse fausse se resume a "0/13 ok" et il faut ouvrir le workspace pour
+    savoir pourquoi : sur un run reel, trois cellules avaient invente une ponderation par la
+    population et une avait garde la moyenne d'origine, quatre diagnostics indiscernables.
+
+    Si le score contre la verite est imparfait et qu'une alternative colle mieux, le `Check`
+    rend `cap x score de l'alternative` et son `detail` NOMME la cause. `zero_above` sert au
+    cas ou une alternative qui colle presque partout ne merite aucun credit (t21 : mesurer une
+    distance en degres donne "tout est a moins de 5 km", ce n'est pas une reponse partielle).
+    """
+    best = compare_keyed(got, truth, name=name, rel_tol=rel_tol, abs_tol=abs_tol,
+                         axis=axis, alt_key=alt_key)
+    best.weight = weight
+    if best.score >= 0.99:
+        return best
+    for label, series in alternatives.items():
+        alt = compare_keyed(got, series, name="_", rel_tol=rel_tol, abs_tol=abs_tol,
+                            alt_key=alt_key)
+        if alt.score <= best.score:
+            continue
+        if zero_above is not None and alt.score > zero_above:
+            return Check(name, False, 0.0, weight=weight, axis=axis, detail=label)
+        best = Check(name, False, round(cap * alt.score, 4), weight=weight, axis=axis,
+                     detail=f"{label} ({alt.detail})")
+    return best
 
 
 def table_check(ws: Path, filename: str, truth: dict[str, float], *, name: str,

@@ -7,13 +7,13 @@ moyenne et la mediane restait sous la tolerance dans 9 departements sur 13 - le 
 etait donc invisible et 'ne rien corriger du tout' notait deja 0.54."""
 from bench.outcome import (
     Check,
+    compare_with_alternatives,
     find,
     git_diff_stat_vs_initial,
     keyed_values,
     load_truth,
     read_table,
     reexecute,
-    table_check,
 )
 
 T = load_truth(__file__)
@@ -25,13 +25,21 @@ def grade(ctx):
     chk, info = reexecute(ws, [OUT])
     rws = info["ws"]
     checks = [chk]
-    checks += table_check(rws, OUT, T["median_by_dep"], name="medians_correct",
-                          key_patterns=[r"dep"], val_patterns=[r"median|revenu"],
-                          rel_tol=0.0, abs_tol=1.0, weight=2.0,
-                          alt_key=lambda k: k.lstrip("0"))
-
     p = find(rws, OUT)
     got = keyed_values(read_table(p), [r"dep"], [r"median|revenu"]) if p else {}
+    checks.append(Check("medians_correct_present", bool(got), 1.0 if got else 0.0,
+                        detail=f"{len(got)} ligne(s) lue(s)" if got else f"{OUT} absent"))
+    # Reponses fausses NOMMEES : sans elles, un echec se resume a "0/13 ok" et il faut ouvrir
+    # le workspace. Sur un run reel, trois cellules avaient invente une ponderation par la
+    # population et une avait garde la moyenne d'origine - quatre diagnostics indiscernables.
+    checks.append(compare_with_alternatives(
+        got, T["median_by_dep"],
+        {"moyenne simple, pas une mediane (bug d'origine non corrige)": T["buggy_mean_by_dep"],
+         "moyenne ponderee par la population, pas une mediane": T["weighted_mean_by_dep"],
+         "mediane ponderee par la population, pas la mediane des communes":
+             T["weighted_median_by_dep"]},
+        name="medians_correct", rel_tol=0.0, abs_tol=1.0, weight=2.0,
+        alt_key=lambda k: k.lstrip("0")))
     kept = [d for d in T["fragile_codes"] if d in got]
     s = len(kept) / len(T["fragile_codes"])
     checks.append(Check("dept_codes_preserved", s >= 0.99, s, detail=f"preserves={kept}"))

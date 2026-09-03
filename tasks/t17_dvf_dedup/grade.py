@@ -3,7 +3,7 @@ lignes surestime de ~40 %. Verite : mutations distinctes (id_mutation), nature '
 type_local Appartement. Credit 0.5 si le resultat correspond a la version naive (lignes)."""
 from bench.outcome import (
     Check,
-    compare_keyed,
+    compare_with_alternatives,
     find,
     keyed_values,
     load_truth,
@@ -25,11 +25,9 @@ def grade(ctx):
         return checks + [Check("sales_count_correct", False, 0.0, weight=2.0,
                                detail="sortie absente")]
     got = keyed_values(read_table(p), [r"commune|code"], [r"nb|ventes|count|n_"])
-    good = compare_keyed(got, T["flat_sales_by_commune"], name="sales_count_correct", abs_tol=0.5)
-    naive = compare_keyed(got, T["flat_rows_by_commune_naive"], name="_", abs_tol=0.5)
-    if good.score < 0.99 and naive.score > good.score:
-        good = Check("sales_count_correct", False, round(0.5 * naive.score, 4),
-                     detail=f"compte des lignes, pas des mutations ({naive.detail})")
-    good.weight = 2.0
+    good = compare_with_alternatives(
+        got, T["flat_sales_by_commune"],
+        {"compte des lignes, pas des mutations": T["flat_rows_by_commune_naive"]},
+        name="sales_count_correct", abs_tol=0.5, weight=2.0)
     ctx.metrics["dedup_exact_frac"] = good.score
     return checks + [good]
