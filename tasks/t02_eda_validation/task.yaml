@@ -1,6 +1,14 @@
 id: t02_eda_validation
 tags: [eda, validation, python]
 timeout_s: 900
+# Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
+# Calibres a 3x la mediane observee de la config nue C0 sur le run de reference
+# qwen3-6-f278654 (plancher 150k tokens / 180 s) : une cellule au cout median de C0
+# score ~0.67, une cellule 3x plus chere tombe a 0. `budget_tokens` porte sur la somme
+# des tokens d'entree par tour, donc un cout FACTURE qui croit avec le nombre de tours
+# (chaque tour renvoie tout le prompt) - ce n'est pas une taille de contexte.
+budget_tokens: 350000
+budget_s: 240
 prompt: |
   Le fichier `donnees_insee.csv` (present dans ce repertoire) contient des donnees communales
   (commune, departement, population, revenu_disponible). Fais une analyse exploratoire (types,

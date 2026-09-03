@@ -126,3 +126,51 @@ def test_yaml_documents(make_ws):
                   "bad.yaml": "a: [unclosed\n"})
     docs = g.yaml_documents(ws)
     assert [d.get("kind") for _, d in docs] == ["Workflow", "Secret"]
+
+
+def test_combined_excludes_efficiency():
+    """`combined` est un score de qualite : un cout desastreux ne doit pas le bouger."""
+    from bench.schema import combined_score
+    quality = {"functional": 1.0, "platform": 1.0, "repro": 1.0, "safety": 1.0}
+    assert combined_score(quality) == 1.0
+    assert combined_score({**quality, "efficiency": 0.0}) == 1.0
+    assert combined_score({**quality, "efficiency": 1.0}) == 1.0
+    assert combined_score({"efficiency": 0.5}) is None
+
+
+def test_best_effort_render_skips_when_engine_missing(make_ws):
+    ws = make_ws({"r.qmd": "---\nformat: html\n---\n"})
+    c = g.best_effort_render(["quarto", "render", "r.qmd"], ws,
+                             requires=("binaire-qui-nexiste-pas",))
+    assert c.axis == "skipped" and c.score == 0.0
+    c2 = g.best_effort_render(["binaire-qui-nexiste-pas"], ws)
+    assert c2.axis == "skipped"
+
+
+def test_run_in_project_accepts_relative_workspace(make_ws, monkeypatch):
+    """Regression : `uv run --project <chemin relatif>` resout depuis le cwd du sous-processus
+    (= le workspace), d'ou "Project directory does not exist" et TOUTE la notation d'execution
+    a 0 sur un `bench regrade runs/<run>` lance en relatif."""
+    ws = make_ws({"pyproject.toml": "[project]\nname='x'\nversion='0'\nrequires-python='>=3.11'\n",
+                  "main.py": "print('ok')\n"})
+    monkeypatch.chdir(ws.parent.parent)
+    rel = ws.relative_to(ws.parent.parent)
+    r, note = g.run_in_project(rel, ["python", "main.py"], timeout=180)
+    assert r.returncode == 0, (note, r.stderr[:300])
+
+
+def test_grading_does_not_create_lockfile_in_workspace(make_ws):
+    """La notation ne doit rien changer au workspace note : un uv.lock cree par le grader
+    etait ensuite compte comme le lockfile de l'agent a la re-notation."""
+    ws = make_ws({"pyproject.toml": "[project]\nname='x'\nversion='0'\nrequires-python='>=3.11'\n",
+                  "main.py": "print('ok')\n"})
+    assert not (ws / "uv.lock").exists()
+    g.run_in_project(ws, ["python", "main.py"], timeout=180)
+    assert not (ws / "uv.lock").exists(), "la notation a laisse un uv.lock derriere elle"
+
+
+def test_pick_entry_script_skips_dunder_init(make_ws):
+    ws = make_ws({"analyse.py": "print(1)\n",
+                  "src/pkg/__init__.py": "def main():\n    pass\n"})
+    scripts = g.deliverable_files(ws, ["*.py"])
+    assert g._pick_entry_script(ws, scripts).name == "analyse.py"

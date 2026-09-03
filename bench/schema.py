@@ -130,6 +130,15 @@ class Check:
 
 AXES = ["functional", "platform", "repro", "safety", "efficiency"]
 
+# Axes de QUALITE : ce que `combined` resume. `efficiency` en est volontairement exclu.
+# Melanger qualite et cout dans un seul chiffre revient a repondre "cette config est-elle
+# meilleure PAR TOKEN ?" alors que la question du benchmark est "cette config est-elle
+# meilleure ?" - et comme une config riche coute mecaniquement plus cher (x3 en tokens sur un
+# run reel), l'axe cout annulait a lui seul le gain de qualite (delta -0.03 avec, +0.06 sans).
+# Le cout reste mesure (axe `efficiency`, tableau de cout du rapport, metriques MLflow), il est
+# juste lu a cote de la qualite plutot que moyenne avec elle.
+QUALITY_AXES = ["functional", "platform", "repro", "safety"]
+
 
 def skipped(name: str, detail: str) -> Check:
     """Check neutre : n'entre dans aucun axe (ex. verification d'absence sur un workspace vide,
@@ -139,8 +148,9 @@ def skipped(name: str, detail: str) -> Check:
 
 
 def combined_score(axis_scores: dict[str, float | None]) -> float | None:
-    """Moyenne non ponderee des axes effectivement mesures (valeurs non None)."""
-    vals = [v for k, v in axis_scores.items() if v is not None and k in AXES]
+    """Moyenne non ponderee des axes de QUALITE effectivement mesures (cf. QUALITY_AXES).
+    `efficiency` n'entre pas dans ce score - voir le commentaire de QUALITY_AXES."""
+    vals = [v for k, v in axis_scores.items() if v is not None and k in QUALITY_AXES]
     return round(statistics.fmean(vals), 4) if vals else None
 
 

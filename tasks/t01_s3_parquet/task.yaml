@@ -1,6 +1,14 @@
 id: t01_s3_parquet
 tags: [s3, duckdb, platform-correctness]
 timeout_s: 900
+# Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
+# Calibres a 3x la mediane observee de la config nue C0 sur le run de reference
+# qwen3-6-f278654 (plancher 150k tokens / 180 s) : une cellule au cout median de C0
+# score ~0.67, une cellule 3x plus chere tombe a 0. `budget_tokens` porte sur la somme
+# des tokens d'entree par tour, donc un cout FACTURE qui croit avec le nombre de tours
+# (chaque tour renvoie tout le prompt) - ce n'est pas une taille de contexte.
+budget_tokens: 700000
+budget_s: 420
 prompt: |
   Le jeu de donnees ppl_census_2021 de mon bucket projet est en Parquet partitionne par
   departement sous s3://mon-bucket/data/census/ (colonnes : code_commune, commune,

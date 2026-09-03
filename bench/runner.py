@@ -126,7 +126,9 @@ def efficiency_checks(task: TaskSpec, run: RunResult) -> list[Check]:
         s = _clamp(1.0 - t.tokens_total / budget_tok)
         checks.append(Check("token_budget", s >= 0.5, s, axis="efficiency",
                             detail=f"{t.tokens_total} tokens / budget {budget_tok}"))
-    budget_s = task.budget_s or task.timeout_s
+    # jamais au-dela du timeout : sinon une cellule qui epuise son budget de temps garderait
+    # un score de temps positif
+    budget_s = min(task.budget_s or task.timeout_s, task.timeout_s)
     used_s = run.agent_s or run.wall_clock_s
     s = _clamp(1.0 - used_s / budget_s)
     checks.append(Check("time_budget", s >= 0.5, s, axis="efficiency",
@@ -270,6 +272,18 @@ def aggregate(records: list[dict], low: str = "C0", high: str = "C4") -> dict:
             "mean_subagent_calls": _mean("subagent_calls"),
         }
 
+    # Couverture : combien de taches alimentent chaque axe. Un axe nourri par 2 taches (repro)
+    # bouge beaucoup plus au bruit qu'un axe nourri par 11 (functional) - le rapport l'affiche
+    # pour que personne ne lise un ecart d'axe faiblement couvert comme un resultat.
+    axis_coverage = {}
+    for axis in AXES:
+        tasks_for_axis = sorted({r["task"] for r in valid
+                                 if r["axis_scores"].get(axis) is not None})
+        n_cells_axis = sum(1 for r in valid if r["axis_scores"].get(axis) is not None)
+        if tasks_for_axis:
+            axis_coverage[axis] = {"n_tasks": len(tasks_for_axis), "n_cells": n_cells_axis,
+                                   "tasks": tasks_for_axis}
+
     # IC bootstrap sur la moyenne des `combined` par cellule
     ci_by_config = {}
     for cfg in configs:
@@ -298,6 +312,7 @@ def aggregate(records: list[dict], low: str = "C0", high: str = "C4") -> dict:
 
     return {
         "mean_by_config": mean_by_config,
+        "axis_coverage": axis_coverage,
         "delta_by_axis": delta,
         "delta_combined_paired": delta_paired,
         "ci_by_config": ci_by_config,

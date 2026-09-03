@@ -40,5 +40,17 @@ def test_parallel_matches_sequential(tmp_path):
                         out_dir=tmp_path / "par", logger=NullLogger(), workers=4)
 
     assert par["n_cells"] == seq["n_cells"]
-    assert par["mean_by_config"] == seq["mean_by_config"]
-    assert par["delta_by_axis"] == seq["delta_by_axis"]
+    # L'axe `efficiency` depend du temps mesure (time_budget), qui varie forcement d'un run a
+    # l'autre : l'invariant porte sur la QUALITE, seule chose que l'ordre d'execution pourrait
+    # casser. `combined` n'inclut pas efficiency, il doit donc etre identique.
+    for cfg, axes in seq["mean_by_config"].items():
+        for axis, val in axes.items():
+            if axis == "efficiency":
+                assert abs(par["mean_by_config"][cfg][axis] - val) < 0.05
+            else:
+                assert par["mean_by_config"][cfg][axis] == val, (cfg, axis)
+    for axis, val in seq["delta_by_axis"].items():
+        if axis == "efficiency":
+            assert abs(par["delta_by_axis"][axis] - val) < 0.05
+        else:
+            assert par["delta_by_axis"][axis] == val, axis

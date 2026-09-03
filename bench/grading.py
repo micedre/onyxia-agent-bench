@@ -336,6 +336,7 @@ def _uv() -> str | None:
 
 
 def _project_env(workspace: Path) -> dict:
+    workspace = workspace.resolve()
     env = os.environ.copy()
     # l'env du projet est cree A COTE du workspace (pas dedans : le workspace est note tel
     # quel), et jamais celui rapatrie du pod (interpreteur/chemins absolus du conteneur).
@@ -355,6 +356,11 @@ def run_in_project(workspace: Path, args: list[str], *, timeout: int = 300,
     (`--with`) les modules manquants signales par ModuleNotFoundError (jusqu'a 4). Renvoie
     (resultat, note) ; la note decrit l'environnement utilise."""
     uv = _uv()
+    # chemin absolu obligatoire : `uv run --project <rel>` resout le chemin depuis le cwd du
+    # sous-processus (= le workspace lui-meme), donc un chemin relatif donne "Project directory
+    # does not exist" - ce qui cassait silencieusement toute la notation d'un `bench regrade
+    # runs/<run>` lance avec un chemin relatif.
+    workspace = workspace.resolve()
     env = _project_env(workspace)
     has_project = (workspace / "pyproject.toml").is_file()
     if uv is None:
@@ -362,7 +368,12 @@ def run_in_project(workspace: Path, args: list[str], *, timeout: int = 300,
                            cwd=workspace, capture_output=True, text=True, timeout=timeout, env=env)
         return r, "python du harnais (uv absent)"
     withs: list[str] = list(extra_with)
-    frozen = (workspace / "uv.lock").is_file()
+    lock_path = workspace / "uv.lock"
+    frozen = lock_path.is_file()
+    # La notation ne doit RIEN changer au workspace qu'elle note : sans lock, `uv run --project`
+    # en ecrit un, et ce fichier etait ensuite compte comme le lockfile de l'agent a la
+    # re-notation (check `lockfile` de t04 passant de 0 a 1 sans que l'agent y soit pour rien).
+    lock_before = lock_path.read_bytes() if frozen else None
     lock_note = ""
     for _attempt in range(6):
         if has_project:
@@ -393,6 +404,11 @@ def run_in_project(workspace: Path, args: list[str], *, timeout: int = 300,
             withs.append(pkg)
             continue
         break
+    # restaurer le lockfile dans l'etat ou l'agent l'a laisse
+    if lock_before is None:
+        lock_path.unlink(missing_ok=True)
+    elif lock_path.is_file() and lock_path.read_bytes() != lock_before:
+        lock_path.write_bytes(lock_before)
     note = ("uv run --project" + (" --frozen" if frozen else "") if has_project
             else "uv run --no-project") + lock_note
     if withs:
@@ -409,7 +425,10 @@ def _pick_entry_script(workspace: Path, scripts: list[Path]) -> Path:
         except OSError:
             txt = ""
         has_main = "__main__" in txt or re.search(r"\bdef main\(", txt) is not None
-        return (0 if has_main else 1, len(_rel(workspace, p).parts), str(p))
+        # un __init__.py n'est jamais le script a lancer, meme s'il expose un main()
+        is_init = p.name == "__init__.py"
+        return (1 if is_init else 0, 0 if has_main else 1,
+                len(_rel(workspace, p).parts), str(p))
     return sorted(scripts, key=score)[0]
 
 
@@ -475,13 +494,20 @@ def r_tests_pass(workspace: Path, *, name: str = "tests_r_pass", timeout: int = 
 
 
 def best_effort_render(cmd: list[str], workspace: Path, *, name: str = "renders",
-                       timeout: int = 300, in_project: bool = True) -> Check:
+                       timeout: int = 300, in_project: bool = True,
+                       requires: tuple[str, ...] = ()) -> Check:
     """Tente une commande de rendu externe (ex. `quarto render x.qmd`), dans l'environnement
-    du projet si `in_project` et qu'un pyproject.toml existe. Si le binaire n'est pas
+    du projet si `in_project` et qu'un pyproject.toml existe. Si le binaire de rendu ou un
+    binaire de MOTEUR requis (`requires`, ex. `Rscript` pour un document knitr) n'est pas
     installe dans ce sandbox, renvoie un check neutre plutot que de penaliser l'agent pour
-    une limitation d'environnement qui n'est pas de son fait."""
+    une limitation d'environnement qui n'est pas de son fait : l'agent, lui, tourne dans
+    l'image de la plateforme, qui a R et Python (constate : des rapports R rendus avec succes
+    dans le pod etaient notes 0 parce que l'hote de notation n'a pas R)."""
     if shutil.which(cmd[0]) is None:
         return skipped(name, f"'{cmd[0]}' absent du sandbox : check ignore")
+    for binary in requires:
+        if shutil.which(binary) is None:
+            return skipped(name, f"moteur '{binary}' absent du sandbox de notation : check ignore")
     try:
         if in_project and (workspace / "pyproject.toml").is_file() and _uv():
             r, note = run_in_project(workspace, cmd, timeout=timeout)

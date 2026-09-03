@@ -2,9 +2,20 @@ id: t11_vision_chart
 tags: [vision, chart-reading]
 timeout_s: 900
 # Tache vision : le modele du run (--model) est remplace par celui-ci pour l'agent primaire
-# et les sous-agents (sauf reviewer/dataviz-vision). gemma4-26b-moe est le modele vision
-# confirme sur le endpoint ; adapter si le catalogue change.
-model: onyxia/gemma4-26b-moe
+# et les sous-agents (sauf reviewer/dataviz-vision).
+# gemma4-26b-moe a ete essaye et REFUSE les images ("I do not have the capability to process
+# image inputs") : il ne convient pas. qwen3-vl est le modele multimodal servi par la
+# passerelle. Si aucun modele vision ne fonctionne, retirer cette tache du jeu par defaut
+# plutot que de laisser des zeros tirer les moyennes.
+model: onyxia/qwen3-vl
+# Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
+# Calibres a 3x la mediane observee de la config nue C0 sur le run de reference
+# qwen3-6-f278654 (plancher 150k tokens / 180 s) : une cellule au cout median de C0
+# score ~0.67, une cellule 3x plus chere tombe a 0. `budget_tokens` porte sur la somme
+# des tokens d'entree par tour, donc un cout FACTURE qui croit avec le nombre de tours
+# (chaque tour renvoie tout le prompt) - ce n'est pas une taille de contexte.
+budget_tokens: 150000
+budget_s: 180
 prompt: |
   Le fichier `chart.png` (present dans ce repertoire) montre la population de plusieurs
   communes. Lis les valeurs du graphique et resume dans un fichier `resume.md` : la commune

@@ -1,6 +1,14 @@
 id: t05_r_scaffold
 tags: [reproducibility, r]
 timeout_s: 900
+# Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
+# Calibres a 3x la mediane observee de la config nue C0 sur le run de reference
+# qwen3-6-f278654 (plancher 150k tokens / 180 s) : une cellule au cout median de C0
+# score ~0.67, une cellule 3x plus chere tombe a 0. `budget_tokens` porte sur la somme
+# des tokens d'entree par tour, donc un cout FACTURE qui croit avec le nombre de tours
+# (chaque tour renvoie tout le prompt) - ce n'est pas une taille de contexte.
+budget_tokens: 2200000
+budget_s: 960
 prompt: |
   Ce repertoire contient deja un script d'analyse (`analyse.R`) qui utilise `donnees_insee.csv`.
   Mets-le en place de facon reproductible, a la maniere de la plateforme (gestion des

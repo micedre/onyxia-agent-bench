@@ -21,8 +21,9 @@ def grade(ctx):
     checks.append(references_vault_api(text))
     checks.append(code_contains(text, [r"service/api-key", r"['\"]service['\"].{0,40}['\"]api-key['\"]"],
                                 name="vault_path_used"))
-    checks.append(code_contains(text, [r"VAULT_MOUNT|mount_point|VAULT_TOP_DIR"],
-                                name="vault_mount_configurable", axis="platform"))
+    # Pas de check "mount configurable" : le prompt ne demande nulle part un point de montage
+    # parametrable, et le noter revenait a sanctionner une exigence inventee par le grader
+    # (0.00 sur toutes les cellules C4 d'un run reel).
     checks.append(no_hardcoded_secrets(text))
     printed = code_lacks(text, [r"print\([^)\n]*(api[_-]?key|secret|token)[^)\n]*\)",
                                 r"logg(ing|er)\.\w+\([^)\n]*(api[_-]?key|secret|token)[^)\n]*\)"],

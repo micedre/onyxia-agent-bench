@@ -74,11 +74,28 @@ plateforme. Visualiser : `mlflow ui --backend-store-uri sqlite:///mlflow.db`.
   manquants>`), pas dans le venv du harnais. Les checks d'absence (pas de secret, pas de
   téléchargement…) sont **neutres** (`axis="skipped"`) quand il n'y a rien à évaluer : un
   workspace vide ne rapporte pas safety=1.0. Sans toucher S3/MLflow/Vault.
-- **Axe efficiency** (harnais, uniforme) : `token_budget` et `time_budget`, score linéaire de
-  1 (coût nul) à 0 (budget atteint), budgets `budget_tokens` (défaut 500 000) / `budget_s`
-  (défaut `timeout_s`) dans `task.yaml`. Les compteurs bruts (tokens entrée/sortie/raisonnement,
-  taille du contexte au 1er et au dernier tour, tours LLM, rejets de permission, appels de
-  sous-agents, erreurs d'outils) sont loggués par cellule.
+- **Qualité et coût sont séparés.** `combined` est la moyenne des axes de **qualité**
+  (`functional`, `platform`, `repro`, `safety` — `bench/schema.py:QUALITY_AXES`) ; l'axe
+  `efficiency` est mesuré et affiché mais **n'y entre pas**. Les mélanger revient à répondre
+  « cette config est-elle meilleure *par token* ? » alors que la question posée est « est-elle
+  meilleure ? » — et comme une config riche coûte mécaniquement plus cher (×3 en tokens sur un
+  run réel), le coût annulait à lui seul le gain de qualité (delta −0.03 avec, +0.06 sans).
+  Le coût se lit dans le **tableau de coût** du rapport et dans MLflow.
+- **Axe efficiency** (harnais, uniforme, diagnostic) : `token_budget` et `time_budget`, score
+  linéaire de 1 (coût nul) à 0 (budget atteint), budgets `budget_tokens` / `budget_s` par tâche
+  dans `task.yaml`, calibrés à 3× la médiane observée de la config nue C0 sur un run de
+  référence. `budget_tokens` porte sur la somme des tokens d'entrée par tour : c'est un coût
+  **facturé**, qui croît avec le nombre de tours (chaque tour renvoie tout le prompt), pas une
+  taille de contexte. Les compteurs bruts (tokens entrée/sortie/raisonnement, taille du contexte
+  au 1er et au dernier tour, tours LLM, rejets de permission, appels de sous-agents, erreurs
+  d'outils) sont loggués par cellule.
+- **La notation ne modifie jamais le workspace qu'elle note** : l'environnement d'exécution est
+  créé à côté (`<cellule>/.grade_venv`) et un `uv.lock` créé par `uv run` est retiré après coup —
+  sinon il serait compté comme le lockfile de l'agent à la re-notation.
+- **Un runtime absent de l'hôte ne pénalise pas l'agent** : l'agent tourne dans l'image de la
+  plateforme (R + Python + quarto), l'hôte de notation pas forcément. Un check qui exige un moteur
+  manquant est **neutre** (`skipped`), et un artefact déjà produit par l'agent (par ex. le HTML
+  Quarto rendu dans le pod) est crédité s'il est cohérent avec sa source et les données.
 - **Statuts de cellule et agrégation** (`bench/schema.py:cell_status`, `bench/runner.py:aggregate`) :
   `ok` et `timeout` (l'agent a tourné ; un timeout est noté sur ce qu'il a produit) entrent dans
   les moyennes ; `never_ran` (pod jamais prêt, binaire absent), `oom` (exit 137) et `error` sont
@@ -86,8 +103,10 @@ plateforme. Visualiser : `mlflow ui --backend-store-uri sqlite:///mlflow.db`.
   timeout et coûts moyens) et **exclues** des moyennes. Sinon une saturation du cluster en fin de
   run met des zéros à la dernière tâche traitée (vu : t10 = 15/15 cellules perdues). L'ordre des
   cellules est mélangé (graine fixe) pour la même raison. Le `combined` d'une config est la
-  moyenne de ses moyennes d'axes ; des IC95 bootstrap sont donnés par config et pour le delta
-  `combined` **apparié** par (tâche, seed) sur les paires valides.
+  moyenne de ses moyennes d'axes de qualité ; des IC95 bootstrap sont donnés par config et pour
+  le delta `combined` **apparié** par (tâche, seed) sur les paires valides. Le rapport indique
+  aussi **combien de tâches alimentent chaque axe** et signale les axes à faible couverture
+  (`repro` ne repose que sur 2 tâches : un écart y est surtout du bruit).
 - **MLflow** (`MlflowClient`, run_id explicites) : 1 run **parent** par invocation (params :
   modèle, configs, seeds, tâches, isolation, image, commit ; métriques : deltas dont
   `delta_combined` et `delta_combined_paired`, `<axe>_<CFG>`, `n_valid_<CFG>`,

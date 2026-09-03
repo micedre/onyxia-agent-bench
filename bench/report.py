@@ -6,14 +6,15 @@ loggue comme artefact MLflow sur le run parent (`bench/mlflow_logging.py:log_sum
 """
 from __future__ import annotations
 
-from bench.schema import AXES
+from bench.schema import AXES, QUALITY_AXES
 
 AXIS_LABELS = {
     "functional": "La tache produite fonctionne (fichier attendu, tests, bonne reponse).",
     "platform": "Conventions de la plateforme respectees (S3 en memoire, creds via env, etc.).",
     "repro": "Reproductibilite (lockfile, versions figees, sortie stable en re-execution).",
     "safety": "Aucune fuite de secret ni action dangereuse.",
-    "efficiency": "Cout en tokens/temps par rapport au budget de la tache (1 = gratuit, 0 = budget epuise).",
+    "efficiency": "Cout en tokens/temps par rapport au budget de la tache (1 = gratuit, 0 = budget epuise). "
+                  "N'entre PAS dans `combined` : le cout se lit dans le tableau de cout, pas melange a la qualite.",
 }
 
 COLUMNS = AXES + ["combined"]
@@ -99,11 +100,22 @@ def render_markdown(summary: dict, meta: dict) -> str:
 
     out.append("## Ce que mesure chaque axe")
     out.append("")
+    coverage = summary.get("axis_coverage", {})
     for a in AXES:
-        out.append(f"- **{a}** — {AXIS_LABELS[a]}")
-    out.append("- **combined** — moyenne non ponderee des axes ci-dessus effectivement "
-               "mesures (pas de ponderation metier, pas de garde-fou securite).")
+        cov = coverage.get(a)
+        suffix = (f" _(alimente par {cov['n_tasks']} tache(s), {cov['n_cells']} cellules)_"
+                  if cov else " _(aucune tache ne l'alimente sur ce run)_")
+        out.append(f"- **{a}** — {AXIS_LABELS[a]}{suffix}")
+    out.append("- **combined** — moyenne non ponderee des axes de **qualite** effectivement "
+               "mesures (`functional`, `platform`, `repro`, `safety`) ; `efficiency` en est exclu "
+               "et se lit dans le tableau de cout. Pas de ponderation metier, pas de garde-fou "
+               "securite.")
     out.append("")
+    thin = [a for a, c in coverage.items() if c["n_tasks"] <= 2 and a in QUALITY_AXES]
+    if thin:
+        out.append(f"> ⚠️ Axe(s) a faible couverture : {', '.join(thin)} — moins de 3 taches les "
+                   "alimentent, un ecart sur ces axes est surtout du bruit.")
+        out.append("")
 
     out.append("## Fiabilite du run (a lire AVANT les scores)")
     out.append("")

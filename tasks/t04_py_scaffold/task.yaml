@@ -1,6 +1,14 @@
 id: t04_py_scaffold
 tags: [reproducibility, python]
 timeout_s: 900
+# Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
+# Calibres a 3x la mediane observee de la config nue C0 sur le run de reference
+# qwen3-6-f278654 (plancher 150k tokens / 180 s) : une cellule au cout median de C0
+# score ~0.67, une cellule 3x plus chere tombe a 0. `budget_tokens` porte sur la somme
+# des tokens d'entree par tour, donc un cout FACTURE qui croit avec le nombre de tours
+# (chaque tour renvoie tout le prompt) - ce n'est pas une taille de contexte.
+budget_tokens: 1000000
+budget_s: 540
 prompt: |
   Ce repertoire contient un script d'analyse `analyse.py` (pandas) qui utilise
   `donnees_insee.csv`. Mets en place autour un projet Python reproductible, a la maniere de

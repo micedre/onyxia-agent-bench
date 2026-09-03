@@ -143,3 +143,46 @@ probleme, et que `reviewer`/`dataviz-vision` deviennent alors capables d'editer.
 - Notation dans l'environnement du projet de l'agent (`uv run`), plus dans le venv du harnais.
 - A venir : rungs `C4-noperm` / `C4-noreview` pour separer la semantique des garde-fous de leur
   plomberie, et regle de fusion supprimant le `edit: allow` herite.
+
+---
+
+## Mise a jour : run de reference `qwen3-6-f278654` (2026-09-03)
+
+Refait avec le harnais corrige (`qwen3-6-35b-moe`, 11 taches × C0/C4 × 2 seeds, isolation pod) :
+**44/44 cellules valides, 0 timeout, 0 pod jamais pret**. Les chiffres ci-dessous ne sont donc plus
+melanges a des defaillances d'infrastructure, et les faux negatifs de notation identifies depuis ont
+ete corriges (re-notation dans `runs/qwen3-6-f278654/regrade/`).
+
+| axe (qualite) | C0 | C4 | delta |
+|---|---|---|---|
+| functional | 0.79 | 0.74 | −0.05 |
+| platform | 0.74 | **0.94** | **+0.20** |
+| repro | 0.50 | 0.50 | +0.00 |
+| safety | 0.73 | **0.88** | **+0.15** |
+| **combined (qualite)** | 0.69 | **0.76** | **+0.07** |
+
+| cout (moyenne par cellule) | C0 | C4 | rapport |
+|---|---|---|---|
+| tokens | 147 k | 437 k | **×3.0** |
+| duree agent | 94 s | 217 s | ×2.3 |
+| tours LLM | 11.3 | 18.6 | ×1.6 |
+| appels bash rejetes | 0.1 | 1.0 | ×10 |
+| delegations a un sous-agent | 0.0 | 0.9 | — |
+
+Lecture : **la config complete ameliore nettement le respect des conventions de plateforme
+(+0.20) et la securite (+0.15)**, pour un `functional` equivalent — et coute trois fois plus cher.
+Le delta global (+0.07, IC95 [−0.09, +0.21] sur 22 paires) n'est pas significatif a ce nombre de
+seeds : il faut 5 seeds et toute l'echelle C0..C4 pour conclure. Mais le sens est inverse de ce que
+le run precedent laissait croire, et l'ecart de cout est, lui, massif et reproductible.
+
+Cela ne change rien aux propositions ci-dessus : le surcout vient toujours des memes mecanismes
+(rejets de permission en mode non interactif, porte `@reviewer`, chargement systematique de
+skills). Reduire ce surcout rendrait la config gagnante sur les deux tableaux.
+
+### Point de blocage cote catalogue de modeles
+
+La tache de lecture de graphique epinglait `onyxia/gemma4-26b-moe` : ce modele **refuse les
+images** via opencode (« I do not have the capability to process image inputs »), 4 cellules sur 4
+sans production. Elle pointe desormais `onyxia/qwen3-vl`. A verifier cote plateforme : quels
+modeles servis sont reellement multimodaux, et est-ce que `dataviz-vision` (qui delegue a
+`qwen3-vl`) recoit bien l'image — en C4 la delegation a renvoye des « resultats vides ».
