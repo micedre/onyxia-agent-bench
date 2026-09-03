@@ -21,6 +21,15 @@ class TaskSpec:
     budget_s: int | None = None
     # Modele impose pour cette tache (ex. un modele vision pour t11) ; None = --model du run.
     model: str | None = None
+    # Jeu de taches auquel elle appartient (cf. --suite).
+    #   "context" : l'enonce TAIT la convention que les couches de config fournissent, donc la
+    #               tache mesure l'apport du contexte. C'est le jeu par defaut.
+    #   "model"   : la tache mesure la competence du modele (pandas, jointures, geo...) ou son
+    #               enonce recite deja la convention - les deux configs y sont a egalite.
+    # Mesure a l'appui (run qwen3-6-all, 17 taches x C0/C4 x 5 seeds, deltas apparies) :
+    # +0.27 IC95 [+0.06, +0.48] sur les taches "context", -0.04 sur les autres, +0.04 non
+    # significatif sur l'ensemble : melanger les deux noyait le signal.
+    suite: str = "model"
 
 
 @dataclass

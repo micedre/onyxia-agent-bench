@@ -1,5 +1,10 @@
 id: t23_code_review
 tags: [code-review, security, mlops]
+# Jeu de taches (cf. --suite). L'enonce TAIT la convention que les couches de config
+# fournissent : cette tache mesure donc l'apport du contexte, pas la competence du modele.
+# Delta apparié C4-C0 mesure sur le run qwen3-6-all, +0.20 : l'enonce demande une relecture
+# "comme pour un collegue", sans lister les problemes a trouver.
+suite: context
 timeout_s: 600
 # Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
 # Valeurs provisoires : ces taches n'ont pas encore de run de reference, elles sont

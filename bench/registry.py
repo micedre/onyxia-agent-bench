@@ -40,5 +40,6 @@ def discover_tasks(tasks_dir: Path) -> dict[str, TaskSpec]:
             budget_tokens=int(meta["budget_tokens"]) if meta.get("budget_tokens") else None,
             budget_s=int(meta["budget_s"]) if meta.get("budget_s") else None,
             model=meta.get("model") or None,
+            suite=str(meta.get("suite") or "model"),
         )
     return tasks

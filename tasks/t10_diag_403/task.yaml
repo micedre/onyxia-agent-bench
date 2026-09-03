@@ -1,5 +1,10 @@
 id: t10_diag_403
 tags: [diagnostic, heuristic, headline]
+# Jeu de taches (cf. --suite). L'enonce TAIT la convention que les couches de config
+# fournissent : cette tache mesure donc l'apport du contexte, pas la competence du modele.
+# Delta apparié C4-C0 mesure sur le run qwen3-6-all, +0.45 : l'enonce donne un symptome
+# (service au rouge, S3 en echec), pas la cause. C4 nomme le jeton expire 5/5, C0 3/5.
+suite: context
 timeout_s: 600
 # Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
 # Calibres a 3x la mediane observee de la config nue C0 sur le run de reference

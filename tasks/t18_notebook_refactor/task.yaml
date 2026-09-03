@@ -1,5 +1,11 @@
 id: t18_notebook_refactor
 tags: [notebook, refactoring, reproducibility, security, git]
+# Jeu de taches (cf. --suite). L'enonce TAIT la convention que les couches de config
+# fournissent : cette tache mesure donc l'apport du contexte, pas la competence du modele.
+# Delta apparié C4-C0 mesure sur le run qwen3-6-all, -0.33, CONTRE-CAS conserve volontairement
+# : le contexte fait sur-construire l'agent (aucune cellule C4 ne commite, contre 4/5 en C0).
+# Une suite ou C4 gagne partout demontrerait son resultat par construction.
+suite: context
 timeout_s: 900
 # Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
 # Valeurs provisoires : ces taches n'ont pas encore de run de reference, elles sont

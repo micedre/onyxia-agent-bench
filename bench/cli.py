@@ -3,6 +3,8 @@
 Exemples :
   python -m bench run --dry-run                        # smoke test (driver mock)
   python -m bench run --model onyxia/qwen3 --seeds 3   # vrais modeles (opencode requis)
+  python -m bench run --configs C0,C4                   # suite `context` (defaut)
+  python -m bench run --suite all --configs C0,C4       # les 17 taches
   python -m bench run --tasks t10_diag_403 --configs C0,C4
   python -m bench regrade runs/bench-20260902-044546   # re-noter un run sans relancer
   python -m bench list
@@ -62,12 +64,33 @@ def _csv(s: str) -> list[str]:
     return [x.strip() for x in s.split(",") if x.strip()]
 
 
-def cmd_list(_args):
+def select_tasks(all_tasks: dict, tasks_arg: str | None, suite: str) -> list:
+    """Taches a lancer. `--tasks` explicite prime toujours ; sinon on filtre par suite.
+
+    Le defaut est la suite `context` : sur le run qwen3-6-all (17 taches x C0/C4 x 5 seeds),
+    le delta apparie valait +0.27 IC95 [+0.06, +0.48] sur ces taches et -0.04 sur les autres,
+    pour +0.04 non significatif sur l'ensemble. Lancer les 17 par defaut revenait a noyer le
+    signal qu'on cherche a mesurer sous des taches ou les deux configs sont a egalite.
+    """
+    if tasks_arg and tasks_arg != "all":
+        return [all_tasks[t] for t in _csv(tasks_arg)]
+    if tasks_arg == "all" or suite == "all":
+        return list(all_tasks.values())
+    chosen = [t for t in all_tasks.values() if t.suite == suite]
+    if not chosen:
+        raise SystemExit(f"aucune tache dans la suite '{suite}' "
+                         f"(suites presentes : {sorted({t.suite for t in all_tasks.values()})})")
+    return chosen
+
+
+def cmd_list(args):
     tasks = discover_tasks(TASKS_DIR)
     base, configs = load_ladder(CONFIGS_DIR)
-    print("Tasks :")
-    for t in tasks.values():
-        print(f"  - {t.id:18s} tags={t.tags}")
+    suite = getattr(args, "suite", "all")
+    shown = select_tasks(tasks, None, suite)
+    print(f"Tasks (suite={suite}) :")
+    for t in sorted(shown, key=lambda t: t.id):
+        print(f"  - {t.id:22s} suite={t.suite:8s} tags={t.tags}")
     print(f"\nConfigs (base={base}) :")
     for c in configs.values():
         print(f"  - {c.id:3s} layers={c.layers}")
@@ -114,8 +137,7 @@ def cmd_run(args):
     all_tasks = discover_tasks(TASKS_DIR)
     base, all_configs = load_ladder(CONFIGS_DIR)
 
-    task_ids = _csv(args.tasks) if args.tasks != "all" else list(all_tasks)
-    tasks = [all_tasks[t] for t in task_ids]
+    tasks = select_tasks(all_tasks, args.tasks, args.suite)
     config_ids = _csv(args.configs)
     configs = [all_configs[c] for c in config_ids]
 
@@ -136,13 +158,15 @@ def cmd_run(args):
         print("[info] mlflow non installe -> journalisation desactivee "
               "(pip install mlflow pour l'activer)")
 
-    print(f"driver={driver.name} model={args.model} seeds={args.seeds} "
-          f"workers={args.workers} tasks={task_ids} configs={config_ids}")
-    print(f"sortie -> {out_dir}\n")
-
-    meta = {"isolation": "mock" if args.dry_run else args.isolation, "workers": args.workers,
+    meta = {"suite": "explicite (--tasks)" if args.tasks else args.suite,
+            "isolation": "mock" if args.dry_run else args.isolation, "workers": args.workers,
             "pod_image": args.pod_image if args.isolation == "pod" else None,
             "harness_commit": GIT_COMMIT}
+
+    print(f"driver={driver.name} model={args.model} seeds={args.seeds} "
+          f"workers={args.workers} suite={meta['suite']} "
+          f"tasks={[t.id for t in tasks]} configs={config_ids}")
+    print(f"sortie -> {out_dir}\n")
     try:
         from bench.runner import run_benchmark
         summary = run_benchmark(tasks, configs, base, CONFIGS_DIR, args.model, args.seeds,
@@ -196,7 +220,13 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pr = sub.add_parser("run", help="lancer le benchmark")
-    pr.add_argument("--tasks", default="all", help="ids separes par des virgules, ou 'all'")
+    pr.add_argument("--tasks", default=None,
+                    help="ids separes par des virgules, ou 'all'. Prime sur --suite.")
+    pr.add_argument("--suite", default="context", choices=["context", "model", "all"],
+                    help="jeu de taches (defaut : context). `context` = les taches dont "
+                         "l'enonce tait la convention que les couches fournissent, donc celles "
+                         "qui mesurent l'apport du contexte ; `model` = celles qui mesurent la "
+                         "competence du modele ; `all` = les deux.")
     pr.add_argument("--configs", default="C0,C4", help="ids de config, ex. C0,C4")
     pr.add_argument("--model", default="onyxia/qwen3-6-35b-moe", help="provider/model pour opencode")
     pr.add_argument("--seeds", type=int, default=3)
@@ -235,6 +265,7 @@ def main(argv=None):
     pr.set_defaults(func=cmd_run)
 
     pl = sub.add_parser("list", help="lister tasks et configs")
+    pl.add_argument("--suite", default="all", choices=["context", "model", "all"])
     pl.set_defaults(func=cmd_list)
 
     pg = sub.add_parser("regrade", help="re-noter un run existant (graders/parseur a jour) "

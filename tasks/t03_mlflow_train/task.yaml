@@ -1,5 +1,11 @@
 id: t03_mlflow_train
 tags: [mlflow, training, python]
+# Jeu de taches (cf. --suite). L'enonce TAIT la convention que les couches de config
+# fournissent : cette tache mesure donc l'apport du contexte, pas la competence du modele.
+# Delta apparié C4-C0 mesure sur le run qwen3-6-all, +0.08 : l'enonce dit "a la maniere de la
+# plateforme" sans dire comment ; notation objective (params et metriques loggues, pas de
+# tracking local en dur).
+suite: context
 timeout_s: 900
 # Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
 # Calibres a 3x la mediane observee de la config nue C0 sur le run de reference
