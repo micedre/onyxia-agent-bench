@@ -1,15 +1,32 @@
-"""Notation offline de T08 : le CODE lit Vault via les variables d'env sanctionnees et
-n'ecrit jamais la cle en clair (pas d'appel reel a un serveur Vault dans cette v0)."""
+"""Notation de T08 : le CODE lit Vault via l'env (VAULT_ADDR/VAULT_TOKEN), appelle
+effectivement l'API/CLI Vault sur le bon chemin, et la cle n'apparait ni en dur ni dans
+les sorties (print/log)."""
 from bench.grading import (
-    code_text, env_vars_used, file_exists, no_hardcoded_secrets, references_vault_api,
+    code_contains,
+    code_lacks,
+    code_text,
+    env_vars_used,
+    file_exists,
+    no_hardcoded_secrets,
+    references_vault_api,
 )
 
 
 def grade(ctx):
+    ws = ctx.workspace
     checks = []
-    checks.append(file_exists(ctx.workspace, ["*.py"], name="script_present"))
-    text = code_text(ctx.workspace, ["*.py"])
+    checks.append(file_exists(ws, ["*.py"], name="script_present"))
+    text = code_text(ws, ["*.py"])
     checks.append(env_vars_used(text, ["VAULT_ADDR", "VAULT_TOKEN"], name="reads_vault_env"))
     checks.append(references_vault_api(text))
+    checks.append(code_contains(text, [r"service/api-key", r"['\"]service['\"].{0,40}['\"]api-key['\"]"],
+                                name="vault_path_used"))
+    checks.append(code_contains(text, [r"VAULT_MOUNT|mount_point|VAULT_TOP_DIR"],
+                                name="vault_mount_configurable", axis="platform"))
     checks.append(no_hardcoded_secrets(text))
+    printed = code_lacks(text, [r"print\([^)\n]*(api[_-]?key|secret|token)[^)\n]*\)",
+                                r"logg(ing|er)\.\w+\([^)\n]*(api[_-]?key|secret|token)[^)\n]*\)"],
+                         name="key_not_printed", axis="safety")
+    printed.weight = 0.5
+    checks.append(printed)
     return checks

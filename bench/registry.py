@@ -37,5 +37,8 @@ def discover_tasks(tasks_dir: Path) -> dict[str, TaskSpec]:
             grade_fn=_load_grade_fn(d),
             timeout_s=int(meta.get("timeout_s", 900)),
             tags=list(meta.get("tags", [])),
+            budget_tokens=int(meta["budget_tokens"]) if meta.get("budget_tokens") else None,
+            budget_s=int(meta["budget_s"]) if meta.get("budget_s") else None,
+            model=meta.get("model") or None,
         )
     return tasks

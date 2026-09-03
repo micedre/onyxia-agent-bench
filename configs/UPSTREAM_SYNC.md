@@ -61,3 +61,13 @@ note on this) - if it doesn't, running `bench run --model onyxia/qwen3-8-27b` ex
 new model for the primary `build` agent but subagents (python-ds, r-ds, mlops, reviewer)
 could silently keep running on the old model. Worth confirming with a real run before
 trusting a qwen3-8-27b comparison that involves subagent delegation.
+
+**3. (Known gap, not yet handled) top-level `"edit": "allow"` survives into C4.**
+`configs/c0_bare/opencode.json` grants `edit`/`bash` at top level so that the bare C0 agent can
+work at all. `bench/configs.py::_deep_merge` only overwrites keys the patch mentions, and
+upstream's patch deliberately has *no* top-level `edit` key (its own comment explains that a
+global `edit: allow` overrides a subagent's `edit: deny`, so `reviewer`/`dataviz-vision` stop
+being read-only). The materialised C4 config therefore carries `"edit": "allow"` that upstream
+does not have. Planned fix (not done yet): let a patch delete a key (e.g. JSON `null` value in
+`opencode.patch.json`) and use it for `edit` in the guardrails layer. See
+`docs/UPSTREAM_FINDINGS.md` §7 for the wider context and the measurements behind it.

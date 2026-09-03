@@ -4,6 +4,7 @@ Exemples :
   python -m bench run --dry-run                        # smoke test (driver mock)
   python -m bench run --model onyxia/qwen3 --seeds 3   # vrais modeles (opencode requis)
   python -m bench run --tasks t10_diag_403 --configs C0,C4
+  python -m bench regrade runs/bench-20260902-044546   # re-noter un run sans relancer
   python -m bench list
 """
 from __future__ import annotations
@@ -19,6 +20,14 @@ from bench.mlflow_logging import HAS_MLFLOW, make_logger
 from bench.opencode_driver import MockOpenCodeDriver, PodOpenCodeDriver, RealOpenCodeDriver
 from bench.registry import discover_tasks
 from bench.schema import AXES
+
+try:
+    import subprocess as _sp
+    GIT_COMMIT = _sp.run(["git", "-C", str(Path(__file__).resolve().parent.parent),
+                          "rev-parse", "--short", "HEAD"], capture_output=True,
+                         text=True).stdout.strip() or "?"
+except Exception:  # pragma: no cover
+    GIT_COMMIT = "?"
 
 REPO = Path(__file__).resolve().parent.parent
 CONFIGS_DIR = REPO / "configs"
@@ -95,7 +104,9 @@ def _build_pod_driver(args, tasks, run_id: str):
         "limits": {"cpu": args.pod_cpu_limit, "memory": args.pod_mem_limit},
     }
     driver = PodOpenCodeDriver(image=args.pod_image, namespace=namespace,
-                               secret_name=secret_name, run_id=run_id, resources=resources)
+                               secret_name=secret_name, run_id=run_id, resources=resources,
+                               ready_timeout_s=args.pod_ready_timeout_s,
+                               ready_retries=args.pod_ready_retries)
     return driver, lambda: k8s.delete("secret", secret_name, namespace)
 
 
@@ -129,24 +140,54 @@ def cmd_run(args):
           f"workers={args.workers} tasks={task_ids} configs={config_ids}")
     print(f"sortie -> {out_dir}\n")
 
+    meta = {"isolation": "mock" if args.dry_run else args.isolation, "workers": args.workers,
+            "pod_image": args.pod_image if args.isolation == "pod" else None,
+            "harness_commit": GIT_COMMIT}
     try:
         from bench.runner import run_benchmark
         summary = run_benchmark(tasks, configs, base, CONFIGS_DIR, args.model, args.seeds,
-                                driver, out_dir, logger, workers=args.workers)
+                                driver, out_dir, logger, workers=args.workers, meta=meta)
     finally:
         if cleanup:
             cleanup()
+    _print_summary(summary, out_dir)
 
-    print("\n=== Moyennes par config ===")
+
+def _print_summary(summary, out_dir: Path):
+    print("\n=== Fiabilite par config (cellules valides / total, taux de timeout) ===")
+    for cfg, rel in summary.get("reliability", {}).items():
+        tr = rel.get("timeout_rate")
+        print(f"  {cfg}: {rel['n_valid']}/{rel['n_cells']} valides, statuts={rel['status_counts']}, "
+              f"timeout={tr:.0%}" if tr is not None else
+              f"  {cfg}: {rel['n_valid']}/{rel['n_cells']} valides, statuts={rel['status_counts']}")
+    print("\n=== Moyennes par config (cellules valides) ===")
     for cfg, axes in summary["mean_by_config"].items():
-        line = " ".join(f"{a}={axes.get(a):.2f}" for a in AXES + ["combined"] if a in axes)
-        print(f"  {cfg}: {line}")
+        line = " ".join(f"{a}={axes.get(a):.2f}" for a in AXES + ["combined"]
+                        if axes.get(a) is not None)
+        ci = summary.get("ci_by_config", {}).get(cfg)
+        ci_txt = f"  IC95 combined/cellule [{ci['ci95'][0]:.2f}, {ci['ci95'][1]:.2f}]" if ci else ""
+        print(f"  {cfg}: {line}{ci_txt}")
     if summary["delta_by_axis"]:
         cmp = summary["compared"]
         print(f"\n=== Delta {cmp['high']} - {cmp['low']} (l'apport du contexte) ===")
         for axis, d in summary["delta_by_axis"].items():
             print(f"  {axis:11s} {d:+.2f}")
+        dp = summary.get("delta_combined_paired")
+        if dp:
+            print(f"  combined apparie : {dp['mean']:+.2f} IC95 [{dp['ci95'][0]:+.2f}, "
+                  f"{dp['ci95'][1]:+.2f}] (n={dp['n']} paires)")
     print(f"\nrapport complet : {out_dir/'summary.json'}")
+
+
+def cmd_regrade(args):
+    from bench.runner import regrade_run
+    run_dir = Path(args.run_dir)
+    if not (run_dir / "summary.json").is_file():
+        raise SystemExit(f"{run_dir} ne contient pas de summary.json")
+    tasks = discover_tasks(TASKS_DIR)
+    out_dir = Path(args.out) if args.out else None
+    summary = regrade_run(run_dir, tasks, out_dir)
+    _print_summary(summary, out_dir or (run_dir / "regrade"))
 
 
 def main(argv=None):
@@ -179,6 +220,11 @@ def main(argv=None):
     pr.add_argument("--pod-mem-request", default="1Gi")
     pr.add_argument("--pod-cpu-limit", default="2")
     pr.add_argument("--pod-mem-limit", default="4Gi")
+    pr.add_argument("--pod-ready-timeout-s", type=int, default=180,
+                    help="attente max du pod Ready par tentative (defaut 180)")
+    pr.add_argument("--pod-ready-retries", type=int, default=1,
+                    help="nouvelles tentatives de creation du Job si le pod n'est jamais pret "
+                         "(defaut 1 ; le diagnostic k8s est ecrit dans <cellule>/k8s_failure.txt)")
     pr.add_argument("--pod-orphan-max-age-s", type=float, default=None,
                     help="age (s) au-dela duquel un job/secret d'un AUTRE run est balaye au "
                          "demarrage (defaut : 2x le plus grand timeout de tache selectionnee)")
@@ -190,6 +236,12 @@ def main(argv=None):
 
     pl = sub.add_parser("list", help="lister tasks et configs")
     pl.set_defaults(func=cmd_list)
+
+    pg = sub.add_parser("regrade", help="re-noter un run existant (graders/parseur a jour) "
+                                        "sans relancer les agents")
+    pg.add_argument("run_dir", help="ex. runs/bench-20260902-044546")
+    pg.add_argument("--out", default=None, help="dossier de sortie (defaut : <run_dir>/regrade)")
+    pg.set_defaults(func=cmd_regrade)
 
     args = p.parse_args(argv)
     args.func(args)

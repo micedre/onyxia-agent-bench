@@ -1,6 +1,10 @@
 id: t11_vision_chart
 tags: [vision, chart-reading]
 timeout_s: 900
+# Tache vision : le modele du run (--model) est remplace par celui-ci pour l'agent primaire
+# et les sous-agents (sauf reviewer/dataviz-vision). gemma4-26b-moe est le modele vision
+# confirme sur le endpoint ; adapter si le catalogue change.
+model: onyxia/gemma4-26b-moe
 prompt: |
   Le fichier `chart.png` (present dans ce repertoire) montre la population de plusieurs
   communes. Lis les valeurs du graphique et resume dans un fichier `resume.md` : la commune

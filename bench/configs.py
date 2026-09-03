@@ -110,4 +110,20 @@ def materialize(config: ConfigSpec, configs_dir: Path, base: str, workspace: Pat
     layer_files["opencode.json"] = _sha256(out)
     (workspace / LAYER_FILES_MANIFEST).write_text(
         json.dumps(layer_files, indent=2, sort_keys=True), encoding="utf-8")
+    _exclude_from_git(workspace, list(layer_files) + [LAYER_FILES_MANIFEST])
     return out
+
+
+def _exclude_from_git(workspace: Path, rel_paths: list[str]) -> None:
+    """Rend les fichiers de couche invisibles a git dans le workspace (`.git/info/exclude`,
+    jamais commite, ne modifie pas le .gitignore que l'agent peut ecrire). Sans ca,
+    `git status`/`git add -A` dans la cellule voient AGENTS.md, opencode.json, .opencode/**
+    et ce manifeste comme du travail en cours : un agent qui "commite tout" (t09) commitait
+    ~50 fichiers du harnais, et `files_changed` les listait comme production de l'agent."""
+    info = workspace / ".git" / "info"
+    if not (workspace / ".git").is_dir():
+        return
+    info.mkdir(parents=True, exist_ok=True)
+    lines = ["# fichiers deposes par onyxia-agent-bench (couches de config) - pas du travail agent"]
+    lines += ["/" + p for p in sorted(set(rel_paths))]
+    (info / "exclude").write_text("\n".join(lines) + "\n", encoding="utf-8")

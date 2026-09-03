@@ -2,7 +2,10 @@ id: t06_argo_pipeline
 tags: [argo, mlops, kubernetes]
 timeout_s: 900
 prompt: |
-  Ecris un pipeline Argo Workflows qui automatise cette analyse sur le cluster de la
-  plateforme : une etape de preparation des donnees, une etape d'entrainement, une etape de
-  log dans MLflow. Le pipeline doit pouvoir tourner directement sur la plateforme (pas de
-  script local ni de docker-compose).
+  Ce repertoire contient une analyse en trois scripts (`pipeline/prepare.py`,
+  `pipeline/train.py`, `pipeline/log_mlflow.py`, sur `donnees_insee.csv`). Ecris un pipeline
+  Argo Workflows qui l'automatise sur le cluster de la plateforme : une etape de preparation
+  des donnees, une etape d'entrainement, une etape de log dans MLflow, dans cet ordre. Le
+  pipeline doit pouvoir tourner directement sur la plateforme (image de la plateforme,
+  identifiants S3/MLflow injectes par l'environnement, pas de script local ni de
+  docker-compose).

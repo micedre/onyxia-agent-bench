@@ -28,68 +28,162 @@ from pathlib import Path
 from bench import k8s
 from bench.schema import Event, RunResult, TaskSpec, Transcript
 
+# --------------------------------------------------------------------------------------
+# Parsing de la sortie `opencode run --format json`.
+#
+# Format reel (opencode 1.18.x) : nd-JSON, un objet par ligne, quatre cles de premier niveau
+# `type`, `timestamp`, `sessionID`, `part` - TOUT le contenu utile est sous `part` :
+#   {"type":"step_start",  "part":{"type":"step-start", ...}}
+#   {"type":"text",        "part":{"type":"text","text":"..."}}
+#   {"type":"tool_use",    "part":{"type":"tool","tool":"bash","callID":"...",
+#                                  "state":{"status":"completed|error","input":{...},
+#                                           "output":"...","error":"..."}}}
+#   {"type":"step_finish", "part":{"type":"step-finish","reason":"tool-calls|stop",
+#                                  "tokens":{"total":..,"input":..,"output":..,"reasoning":..,
+#                                            "cache":{"read":..,"write":..}},"cost":0}}
+# Un `step_finish` = un tour LLM ; `tokens.input` est la taille du contexte envoye a CE tour
+# (le prompt complet est renvoye a chaque tour), donc la somme sur les tours est le cout
+# "facture" et la valeur du dernier tour est la taille finale du contexte.
+#
+# L'ancien parseur ne regardait que les cles de premier niveau (`usage`, `text`, `tool`...) :
+# avec ce format il ne voyait ni tokens (toujours 0), ni texte assistant (0 evenement
+# "message", donc `steps == tool_calls` et `transcript.text` retombait sur le stdout brut),
+# ni nom d'outil. Constate sur 165/165 cellules d'un run reel. On garde un repli tolerant
+# pour d'autres formats (objet unique, cles a plat), mais le chemin `part` est le chemin normal.
+# --------------------------------------------------------------------------------------
+_PERMISSION_REJECTED = "rejected permission"
+_OUTPUT_KEEP = 4000  # caracteres de sortie d'outil conserves par evenement
 
-# --------------------------------------------------------------------------------------
-# Parsing tolerant de la sortie `--format json` (le schema varie selon les versions).
-# --------------------------------------------------------------------------------------
+
+def _as_int(x) -> int:
+    try:
+        return int(x or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _ingest_tokens(t: Transcript, tokens: dict):
+    inp = _as_int(tokens.get("input", tokens.get("prompt_tokens")))
+    out = _as_int(tokens.get("output", tokens.get("completion_tokens")))
+    t.tokens_in += inp
+    t.tokens_out += out
+    t.tokens_reasoning += _as_int(tokens.get("reasoning"))
+    cache = tokens.get("cache") or {}
+    if isinstance(cache, dict):
+        t.tokens_cache_read += _as_int(cache.get("read"))
+        t.tokens_cache_write += _as_int(cache.get("write"))
+    if inp:
+        if not t.context_tokens_first:
+            t.context_tokens_first = inp
+        t.context_tokens_last = inp
+
+
+def _ingest_part(t: Transcript, outer: dict, part: dict):
+    """Un evenement au format opencode 1.18 (`part` imbrique)."""
+    ptype = str(part.get("type") or outer.get("type") or "")
+    turn = t.assistant_turns + 1
+    if ptype in ("text", "reasoning") or outer.get("type") == "text":
+        txt = part.get("text") or ""
+        if txt and ptype != "reasoning":
+            t.events.append(Event("message", text=str(txt), raw=outer, turn=turn))
+    elif ptype == "tool" or outer.get("type") in ("tool_use", "tool", "tool_call"):
+        state = part.get("state") or {}
+        inp = state.get("input", part.get("input", {}))
+        output = str(state.get("output") or "")
+        error = str(state.get("error") or "")
+        status = str(state.get("status") or "")
+        name = str(part.get("tool") or part.get("name") or "tool")
+        ev = Event("tool", name=name, text=json.dumps(inp, ensure_ascii=False)[:300], raw=outer,
+                   status=status, output=(output or error)[:_OUTPUT_KEEP], turn=turn)
+        t.events.append(ev)
+        if status == "error" or error:
+            t.tool_errors += 1
+        if _PERMISSION_REJECTED in output or _PERMISSION_REJECTED in error:
+            t.permission_rejections += 1
+        if name == "task":
+            t.subagent_calls += 1
+    elif ptype in ("step-finish", "step_finish") or outer.get("type") == "step_finish":
+        t.assistant_turns += 1
+        tokens = part.get("tokens") or {}
+        if isinstance(tokens, dict):
+            _ingest_tokens(t, tokens)
+        try:
+            t.cost += float(part.get("cost") or 0)
+        except (TypeError, ValueError):
+            pass
+    # step-start et autres : rien a extraire
+
+
+def _ingest_flat(t: Transcript, obj: dict):
+    """Repli tolerant pour d'autres formats (cles a plat, listes imbriquees)."""
+    role = obj.get("role")
+    txt = obj.get("text") or obj.get("content") or obj.get("message") or ""
+    if isinstance(txt, list):  # certains formats: content = [{type,text},...]
+        txt = " ".join(p.get("text", "") for p in txt if isinstance(p, dict))
+    if txt and role in (None, "assistant", "model"):
+        t.events.append(Event("message", text=str(txt), raw=obj))
+    tname = obj.get("tool") or obj.get("tool_name") or obj.get("name")
+    if obj.get("type") in ("tool", "tool_use", "tool_call") or (tname and "input" in obj):
+        t.events.append(Event("tool", name=str(tname or "tool"),
+                              text=json.dumps(obj.get("input", {}))[:300], raw=obj))
+    usage = obj.get("usage") or obj.get("tokens") or {}
+    if isinstance(usage, dict) and usage:
+        t.assistant_turns += 1
+        _ingest_tokens(t, usage)
+    for key in ("parts", "messages", "events", "steps", "output"):
+        sub = obj.get(key)
+        if isinstance(sub, list):
+            for s in sub:
+                if isinstance(s, dict):
+                    _ingest_obj(t, s)
+
+
+def _ingest_obj(t: Transcript, obj: dict):
+    part = obj.get("part")
+    if isinstance(part, dict):
+        _ingest_part(t, obj, part)
+    else:
+        _ingest_flat(t, obj)
+
+
 def parse_output(stdout: str) -> Transcript:
     t = Transcript(raw_stdout=stdout)
     stdout = (stdout or "").strip()
     if not stdout:
         return t
 
-    def ingest_obj(obj: dict):
-        # texte assistant
-        role = obj.get("role")
-        txt = obj.get("text") or obj.get("content") or obj.get("message") or ""
-        if isinstance(txt, list):  # certains formats: content = [{type,text},...]
-            txt = " ".join(p.get("text", "") for p in txt if isinstance(p, dict))
-        if txt and role in (None, "assistant", "model"):
-            t.events.append(Event("message", text=str(txt), raw=obj))
-        # appels d'outils
-        tname = obj.get("tool") or obj.get("tool_name") or obj.get("name")
-        if obj.get("type") in ("tool", "tool_use", "tool_call") or (tname and "input" in obj):
-            t.events.append(Event("tool", name=str(tname or "tool"),
-                                  text=json.dumps(obj.get("input", {}))[:300], raw=obj))
-        # usage tokens
-        usage = obj.get("usage") or obj.get("tokens") or {}
-        if isinstance(usage, dict):
-            t.tokens_in += int(usage.get("input", usage.get("prompt_tokens", 0)) or 0)
-            t.tokens_out += int(usage.get("output", usage.get("completion_tokens", 0)) or 0)
-        # recursion sur des listes imbriquees frequentes
-        for key in ("parts", "messages", "events", "steps", "output"):
-            sub = obj.get(key)
-            if isinstance(sub, list):
-                for s in sub:
-                    if isinstance(s, dict):
-                        ingest_obj(s)
-
-    # 1) objet JSON unique
+    # 1) objet JSON unique / liste
     try:
         obj = json.loads(stdout)
         if isinstance(obj, dict):
-            ingest_obj(obj)
+            _ingest_obj(t, obj)
         elif isinstance(obj, list):
             for s in obj:
                 if isinstance(s, dict):
-                    ingest_obj(s)
+                    _ingest_obj(t, s)
     except json.JSONDecodeError:
-        # 2) nd-JSON (une ligne = un objet)
+        # 2) nd-JSON (une ligne = un objet) ; les lignes non-JSON (warnings...) sont ignorees
         parsed_any = False
         for line in stdout.splitlines():
             line = line.strip()
             if not line:
                 continue
             try:
-                ingest_obj(json.loads(line))
-                parsed_any = True
+                obj = json.loads(line)
             except json.JSONDecodeError:
-                pass
+                continue
+            if isinstance(obj, dict):
+                _ingest_obj(t, obj)
+                parsed_any = True
         # 3) repli texte brut
         if not parsed_any:
             t.events.append(Event("message", text=stdout))
 
-    t.text = "\n".join(e.text for e in t.events if e.type == "message") or stdout
+    # Texte assistant uniquement. Ne PAS retomber sur le stdout brut : il contient les
+    # sorties d'outils (fichiers lus par l'agent), et un grader de transcript y trouverait
+    # des motifs que l'agent n'a jamais enonces (constate : la cause d'un 403 lue dans un
+    # troubleshooting.md comptait comme diagnostic).
+    t.text = "\n".join(e.text for e in t.events if e.type == "message")
     return t
 
 
@@ -152,12 +246,16 @@ class RealOpenCodeDriver(BaseDriver):
         finally:
             shutil.rmtree(xdg_dir, ignore_errors=True)
         dt = time.time() - t0
+        if rc == 124:
+            timed_out = True
         transcript = parse_output(out)
         if err:
             transcript.raw_stdout += "\n[STDERR]\n" + err
-        return RunResult(task.id, config_id, model, seed, workspace, transcript,
-                         exit_code=rc, timed_out=timed_out, wall_clock_s=dt,
-                         error=None if rc == 0 else f"exit={rc}")
+        res = RunResult(task.id, config_id, model, seed, workspace, transcript,
+                        exit_code=rc, timed_out=timed_out, wall_clock_s=dt,
+                        error=None if rc == 0 else f"exit={rc}")
+        res.agent_s = dt
+        return res
 
 
 # --------------------------------------------------------------------------------------
@@ -178,7 +276,7 @@ class PodOpenCodeDriver(BaseDriver):
 
     def __init__(self, image: str, namespace: str, secret_name: str, run_id: str,
                 resources: dict, pod_workdir: str = "/tmp/bench-cell",
-                ready_timeout_s: int = 180):
+                ready_timeout_s: int = 180, ready_retries: int = 1):
         self.image = image
         self.namespace = namespace
         self.secret_name = secret_name
@@ -186,96 +284,137 @@ class PodOpenCodeDriver(BaseDriver):
         self.resources = resources
         self.pod_workdir = pod_workdir
         self.ready_timeout_s = ready_timeout_s
+        self.ready_retries = ready_retries
         self._counter = itertools.count()
 
     def run(self, task, workspace, model, seed, config_id) -> RunResult:
         t0 = time.time()
-        idx = next(self._counter)
-        job_name = f"bench-{k8s.sanitize_label(self.run_id)[:20]}-{idx:04d}-{uuid.uuid4().hex[:6]}"
-        pod = None
 
         def fail(error: str, exit_code: int = 1, timed_out: bool = False) -> RunResult:
             return RunResult(task.id, config_id, model, seed, workspace, Transcript(text=""),
                              exit_code=exit_code, timed_out=timed_out,
                              wall_clock_s=time.time() - t0, error=error)
 
+        # Le workspace est `<cell_dir>/ws` : les diagnostics k8s vont a cote, pas dedans
+        # (le workspace est note et uploade tel quel).
+        diag_path = workspace.parent / "k8s_failure.txt"
+        last_err = None
+        for attempt in range(self.ready_retries + 1):
+            idx = next(self._counter)
+            job_name = (f"bench-{k8s.sanitize_label(self.run_id)[:20]}-{idx:04d}-"
+                        f"{uuid.uuid4().hex[:6]}")
+            try:
+                sleep_s = task.timeout_s + 300  # marge pour ready/push/pull autour de l'exec
+                manifest = k8s.build_job_manifest(
+                    name=job_name, namespace=self.namespace, image=self.image,
+                    secret_name=self.secret_name, run_id=self.run_id, task_id=task.id,
+                    config_id=config_id, seed=seed, model=model, sleep_seconds=sleep_s,
+                    active_deadline_s=sleep_s, ttl_after_finished_s=120,
+                    resources=self.resources)
+                try:
+                    k8s.kubectl_apply(manifest, timeout=30)
+                except RuntimeError as e:
+                    return fail(f"creation du job k8s echouee : {e}", exit_code=1)
+
+                try:
+                    pod = k8s.wait_pod_ready(job_name, self.namespace, self.ready_timeout_s)
+                except (RuntimeError, subprocess.TimeoutExpired) as e:
+                    # Capturer la cause AVANT le delete du finally (describe/events disparaissent
+                    # avec le Job) : sans ca, "pod jamais pret" est indiagnosticable (34 cellules
+                    # perdues sur un run reel sans aucune trace de la raison).
+                    last_err = f"pod jamais pret : {e}"
+                    try:
+                        diag = k8s.diagnose_job(job_name, self.namespace)
+                        with diag_path.open("a", encoding="utf-8") as fh:
+                            fh.write(f"=== tentative {attempt + 1} job={job_name} : {last_err}\n"
+                                     f"{diag}\n")
+                    except Exception as de:  # diagnostic best-effort
+                        last_err += f" (diagnostic k8s impossible : {de!r})"
+                    if attempt < self.ready_retries:
+                        k8s.delete("job", job_name, self.namespace, wait=True, timeout=60)
+                        continue
+                    return fail(last_err, exit_code=1)
+
+                return self._exec_cell(task, workspace, model, seed, config_id, pod, t0)
+            except Exception as e:  # filet de securite : run_cell() ne rattrape rien
+                return fail(f"pod driver, erreur inattendue : {e!r}")
+            finally:
+                # Attendre la disparition du pod : sinon il chevauche la cellule suivante du
+                # meme worker et le nombre reel de pods depasse --workers.
+                k8s.delete("job", job_name, self.namespace, wait=True, timeout=90)
+        return fail(last_err or "pod jamais pret", exit_code=1)
+
+    def _exec_cell(self, task, workspace, model, seed, config_id, pod: str,
+                   t0: float) -> RunResult:
+        def fail(error: str, exit_code: int = 1) -> RunResult:
+            return RunResult(task.id, config_id, model, seed, workspace, Transcript(text=""),
+                             exit_code=exit_code, wall_clock_s=time.time() - t0, error=error)
+
+        for binary in ("tar", "opencode"):
+            if not k8s.check_binary(pod, self.namespace, binary):
+                return fail(f"'{binary}' absent de l'image '{self.image}' "
+                            "(image mal choisie pour --isolation pod ?)", exit_code=127)
+
         try:
-            sleep_s = task.timeout_s + 300  # marge pour ready/push/pull autour de l'exec
-            manifest = k8s.build_job_manifest(
-                name=job_name, namespace=self.namespace, image=self.image,
-                secret_name=self.secret_name, run_id=self.run_id, task_id=task.id,
-                config_id=config_id, seed=seed, model=model, sleep_seconds=sleep_s,
-                active_deadline_s=sleep_s, ttl_after_finished_s=120, resources=self.resources)
-            try:
-                k8s.kubectl_apply(manifest, timeout=30)
-            except RuntimeError as e:
-                return fail(f"creation du job k8s echouee : {e}", exit_code=1)
+            k8s.push_workspace(workspace, pod, self.namespace, self.pod_workdir, timeout=60)
+        except (RuntimeError, subprocess.TimeoutExpired) as e:
+            return fail(f"push du workspace echoue : {e}")
 
-            try:
-                pod = k8s.wait_pod_ready(job_name, self.namespace, self.ready_timeout_s)
-            except (RuntimeError, subprocess.TimeoutExpired) as e:
-                return fail(f"pod jamais pret : {e}", exit_code=1)
+        # --agent build : sans lui, opencode retombe sur `default_agent` (souvent "plan"
+        # dans la config globale onyxia, qui REFUSE toute edition - cf. README).
+        # XDG_CONFIG_HOME/XDG_DATA_HOME isoles : l'image bake ~/.config/opencode (la vraie
+        # install opencode-onyxia globale - prompts, skills, sous-agents, permissions), qui
+        # sinon s'applique a CHAQUE cellule quelle que soit sa config (C0 y compris) et
+        # rend l'echelle d'ablation inoperante (verifie empiriquement). Seuls nos propres
+        # calques (configs/layers/) doivent varier entre C0..C4.
+        # Hors de pod_workdir expres : ce dossier est pousse/rapatrie tel quel, on ne
+        # veut pas que ces fichiers d'etat opencode polluent le workspace note/uploade.
+        # CI=1 : meme signal de non-interactivite que le driver process.
+        xdg_cfg = shlex.quote("/tmp/bench-xdg-config")
+        xdg_data = shlex.quote("/tmp/bench-xdg-data")
+        cmd = (f"cd {shlex.quote(self.pod_workdir)} && "
+               f"OPENCODE_CONFIG={shlex.quote(self.pod_workdir + '/opencode.json')} "
+               f"XDG_CONFIG_HOME={xdg_cfg} XDG_DATA_HOME={xdg_data} CI=1 "
+               f"timeout {task.timeout_s}s opencode run --agent build "
+               f"-m {shlex.quote(model)} --format json {shlex.quote(task.prompt)}")
+        timed_out = False
+        rc = 0
+        out, err = "", ""
+        agent_t0 = time.time()
+        try:
+            r = subprocess.run(
+                ["kubectl", "exec", pod, "-n", self.namespace, "--", "sh", "-c", cmd],
+                capture_output=True, text=True, timeout=task.timeout_s + 30)
+            rc, out, err = r.returncode, r.stdout, r.stderr
+        except subprocess.TimeoutExpired as e:
+            timed_out = True
+            rc = 124
 
-            for binary in ("tar", "opencode"):
-                if not k8s.check_binary(pod, self.namespace, binary):
-                    return fail(f"'{binary}' absent de l'image '{self.image}' "
-                               "(image mal choisie pour --isolation pod ?)", exit_code=127)
+            def _decode(x):
+                return x.decode("utf-8", errors="replace") if isinstance(x, bytes) else (x or "")
+            out, err = _decode(e.stdout), _decode(e.stderr)
+        agent_s = time.time() - agent_t0
+        if rc == 124:
+            # `timeout` (coreutils, dans le conteneur) rend 124 : c'est LE cas normal de
+            # depassement en mode pod, le TimeoutExpired cote client n'arrive qu'en secours.
+            timed_out = True
+            err += "\n[TIMEOUT]"
 
-            try:
-                k8s.push_workspace(workspace, pod, self.namespace, self.pod_workdir,
-                                  timeout=60)
-            except (RuntimeError, subprocess.TimeoutExpired) as e:
-                return fail(f"push du workspace echoue : {e}")
+        try:
+            k8s.pull_workspace(pod, self.namespace, self.pod_workdir, workspace, timeout=60)
+        except (RuntimeError, subprocess.TimeoutExpired) as e:
+            # on garde quand meme la sortie de l'exec : mieux vaut un grade partiel
+            # (fichiers non recuperes) qu'une cellule totalement perdue.
+            err += f"\n[PULL WORKSPACE ECHOUE] {e}"
 
-            # --agent build : sans lui, opencode retombe sur `default_agent` (souvent "plan"
-            # dans la config globale onyxia, qui REFUSE toute edition - cf. README).
-            # XDG_CONFIG_HOME/XDG_DATA_HOME isoles : l'image bake ~/.config/opencode (la vraie
-            # install opencode-onyxia globale - prompts, skills, sous-agents, permissions), qui
-            # sinon s'applique a CHAQUE cellule quelle que soit sa config (C0 y compris) et
-            # rend l'echelle d'ablation inoperante (verifie empiriquement). Seuls nos propres
-            # calques (configs/layers/) doivent varier entre C0..C4.
-            # Hors de pod_workdir expres : ce dossier est pousse/rapatrie tel quel, on ne
-            # veut pas que ces fichiers d'etat opencode polluent le workspace note/uploade.
-            xdg_cfg = shlex.quote("/tmp/bench-xdg-config")
-            xdg_data = shlex.quote("/tmp/bench-xdg-data")
-            cmd = (f"cd {shlex.quote(self.pod_workdir)} && "
-                  f"OPENCODE_CONFIG={shlex.quote(self.pod_workdir + '/opencode.json')} "
-                  f"XDG_CONFIG_HOME={xdg_cfg} XDG_DATA_HOME={xdg_data} "
-                  f"timeout {task.timeout_s}s opencode run --agent build "
-                  f"-m {shlex.quote(model)} --format json {shlex.quote(task.prompt)}")
-            timed_out = False
-            rc = 0
-            out, err = "", ""
-            try:
-                r = subprocess.run(
-                    ["kubectl", "exec", pod, "-n", self.namespace, "--", "sh", "-c", cmd],
-                    capture_output=True, text=True, timeout=task.timeout_s + 30)
-                rc, out, err = r.returncode, r.stdout, r.stderr
-            except subprocess.TimeoutExpired as e:
-                timed_out = True
-                rc = 124
-                def _decode(x):
-                    return x.decode("utf-8", errors="replace") if isinstance(x, bytes) else (x or "")
-                out, err = _decode(e.stdout), _decode(e.stderr) + "\n[TIMEOUT]"
-
-            try:
-                k8s.pull_workspace(pod, self.namespace, self.pod_workdir, workspace,
-                                  timeout=60)
-            except (RuntimeError, subprocess.TimeoutExpired) as e:
-                # on garde quand meme la sortie de l'exec : mieux vaut un grade partiel
-                # (fichiers non recuperes) qu'une cellule totalement perdue.
-                err += f"\n[PULL WORKSPACE ECHOUE] {e}"
-
-            transcript = parse_output(out)
-            if err:
-                transcript.raw_stdout += "\n[STDERR]\n" + err
-            return RunResult(task.id, config_id, model, seed, workspace, transcript,
-                             exit_code=rc, timed_out=timed_out, wall_clock_s=time.time() - t0,
-                             error=None if rc == 0 else f"exit={rc}")
-        except Exception as e:  # filet de securite : run_cell() ne rattrape rien
-            return fail(f"pod driver, erreur inattendue : {e!r}")
-        finally:
-            k8s.delete("job", job_name, self.namespace)
+        transcript = parse_output(out)
+        if err:
+            transcript.raw_stdout += "\n[STDERR]\n" + err
+        res = RunResult(task.id, config_id, model, seed, workspace, transcript,
+                        exit_code=rc, timed_out=timed_out, wall_clock_s=time.time() - t0,
+                        error=None if rc == 0 else f"exit={rc}")
+        res.agent_s = agent_s  # duree de l'appel agent seul (hors cycle de vie du pod)
+        return res
 
 
 # --------------------------------------------------------------------------------------
@@ -330,10 +469,13 @@ class MockOpenCodeDriver(BaseDriver):
             events += [Event("message", f"[mock] tache {task.id} non specialisee.")]
 
         # tokens factices pour peupler les metriques
+        for i, e in enumerate(events):
+            e.turn = i + 1
         transcript = Transcript(
             text="\n".join(e.text for e in events if e.type == "message"),
             events=events, raw_stdout="[mock]",
-            tokens_in=1200 if good else 2200, tokens_out=300 if good else 900)
+            tokens_in=1200 if good else 2200, tokens_out=300 if good else 900,
+            assistant_turns=len(events), context_tokens_first=800, context_tokens_last=1100)
         changed = [str(p.relative_to(workspace)) for p in workspace.rglob("*")
                    if p.is_file() and ".git" not in p.parts]
         return RunResult(task.id, config_id, model, seed, workspace, transcript,
@@ -342,26 +484,39 @@ class MockOpenCodeDriver(BaseDriver):
 
 # --- gabarits de code produits par le mock ---
 _T01_GOOD = '''\
+"""Revenu median par departement + top 10 communes, depuis S3 (ou un miroir local)."""
 import os
-import duckdb
 
-con = duckdb.connect()
-con.execute("INSTALL httpfs; LOAD httpfs;")
-con.execute(f"SET s3_endpoint=\\'{os.environ[\\'AWS_S3_ENDPOINT\\']}\\';")
-con.execute(f"SET s3_access_key_id=\\'{os.environ[\\'AWS_ACCESS_KEY_ID\\']}\\';")
-con.execute(f"SET s3_secret_access_key=\\'{os.environ[\\'AWS_SECRET_ACCESS_KEY\\']}\\';")
+import pandas as pd
+import pyarrow.dataset as ds
 
-df = con.execute("""
-    SELECT departement, median(revenu_disponible) AS revenu_median
-    FROM read_parquet('s3://mon-bucket/data/census/*.parquet')
-    GROUP BY departement
-""").pl()
+CENSUS_URI = os.environ.get("CENSUS_URI", "s3://mon-bucket/data/census/")
+OUTPUT_URI = os.environ.get("OUTPUT_URI", "s3://mon-bucket/data/derived/")
 
-con.execute("""
-    COPY (SELECT commune, population FROM read_parquet('s3://mon-bucket/data/census/*.parquet')
-          ORDER BY population DESC LIMIT 10)
-    TO 's3://mon-bucket/data/derived/top10_communes.parquet' (FORMAT PARQUET)
-""")
+
+def storage_options():
+    if not CENSUS_URI.startswith("s3://"):
+        return None
+    return {"key": os.environ["AWS_ACCESS_KEY_ID"], "secret": os.environ["AWS_SECRET_ACCESS_KEY"],
+            "client_kwargs": {"endpoint_url": "https://" + os.environ["AWS_S3_ENDPOINT"]}}
+
+
+def main():
+    if CENSUS_URI.startswith("s3://"):
+        df = pd.read_parquet(CENSUS_URI, storage_options=storage_options())  # lecture en memoire
+    else:
+        df = ds.dataset(CENSUS_URI, format="parquet", partitioning="hive").to_table().to_pandas()
+    med = df.groupby("departement")["revenu_disponible"].median().reset_index()
+    top = df.nlargest(10, "population")[["commune", "departement", "population"]]
+    os.makedirs(OUTPUT_URI, exist_ok=True) if not OUTPUT_URI.startswith("s3://") else None
+    med.to_parquet(OUTPUT_URI.rstrip("/") + "/revenu_median_departement.parquet", index=False,
+                   storage_options=storage_options())
+    top.to_parquet(OUTPUT_URI.rstrip("/") + "/top10_communes.parquet", index=False,
+                   storage_options=storage_options())
+
+
+if __name__ == "__main__":
+    main()
 '''
 
 _T01_BAD = '''\

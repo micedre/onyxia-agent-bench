@@ -14,7 +14,8 @@ import json
 import re
 import shlex
 import subprocess
-from datetime import datetime, timezone
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 LABEL_APP = "app"
@@ -46,10 +47,19 @@ def kubectl_apply(manifest: dict, *, timeout: float = 30):
         input_bytes=json.dumps(manifest).encode("utf-8"), text=False, timeout=timeout)
 
 
-def delete(kind: str, name: str, namespace: str, *, timeout: float = 30):
-    subprocess.run(["kubectl", "delete", kind, name, "-n", namespace,
-                    "--wait=false", "--ignore-not-found=true"],
-                   capture_output=True, timeout=timeout)
+def delete(kind: str, name: str, namespace: str, *, timeout: float = 30, wait: bool = False):
+    """Supprime un objet. `wait=True` attend la disparition effective (utile en fin de cellule :
+    sinon le pod en `Terminating` chevauche le pod de la cellule suivante et le nombre reel de
+    pods concurrents depasse --workers, ce qui favorise les echecs d'ordonnancement/quota)."""
+    args = ["kubectl", "delete", kind, name, "-n", namespace, "--ignore-not-found=true"]
+    if wait:
+        args += ["--wait=true", f"--timeout={int(timeout)}s"]
+    else:
+        args += ["--wait=false"]
+    try:
+        subprocess.run(args, capture_output=True, timeout=timeout + 15)
+    except subprocess.TimeoutExpired:
+        pass  # le TTL/activeDeadline cote cluster prend le relais
 
 
 def build_job_manifest(*, name: str, namespace: str, image: str, secret_name: str,
@@ -109,17 +119,58 @@ def build_secret_manifest(*, name: str, namespace: str, run_id: str,
     }
 
 
+def _pod_names(job_name: str, namespace: str) -> list[str]:
+    r = subprocess.run(["kubectl", "get", "pod", "-l", f"job-name={job_name}", "-n", namespace,
+                        "-o", "jsonpath={.items[*].metadata.name}"],
+                       capture_output=True, text=True, timeout=15)
+    return r.stdout.split() if r.returncode == 0 else []
+
+
+def wait_pod_exists(job_name: str, namespace: str, timeout_s: float) -> str:
+    """Attend que le controleur Job ait cree le pod. `kubectl apply` rend la main des que le
+    Job est persiste, avant la creation du pod ; `kubectl wait` sur un selecteur sans objet
+    echoue immediatement ("no matching resources found") - constate sur de vrais runs."""
+    deadline = time.time() + timeout_s
+    while True:
+        names = _pod_names(job_name, namespace)
+        if names:
+            return names[0]
+        if time.time() >= deadline:
+            raise RuntimeError(f"aucun pod cree pour le job {job_name} apres {timeout_s:.0f}s "
+                               "(quota ResourceQuota ? controleur Job en retard ?)")
+        time.sleep(2)
+
+
 def wait_pod_ready(job_name: str, namespace: str, timeout_s: int) -> str:
-    """Attend que le pod du Job soit Ready, renvoie son nom."""
-    _run(["kubectl", "wait", "--for=condition=Ready", "pod",
-         "-l", f"job-name={job_name}", "-n", namespace, f"--timeout={timeout_s}s"],
-        timeout=timeout_s + 15)
-    r = _run(["kubectl", "get", "pod", "-l", f"job-name={job_name}", "-n", namespace,
-             "-o", "jsonpath={.items[0].metadata.name}"], timeout=15)
-    pod_name = r.stdout.strip()
-    if not pod_name:
-        raise RuntimeError(f"pod introuvable pour job {job_name}")
+    """Attend que le pod du Job existe puis soit Ready, renvoie son nom."""
+    t0 = time.time()
+    pod_name = wait_pod_exists(job_name, namespace, min(60, timeout_s))
+    remaining = max(5, int(timeout_s - (time.time() - t0)))
+    _run(["kubectl", "wait", "--for=condition=Ready", "pod", pod_name,
+         "-n", namespace, f"--timeout={remaining}s"], timeout=remaining + 15)
     return pod_name
+
+
+def diagnose_job(job_name: str, namespace: str, *, timeout: float = 20) -> str:
+    """Capture ce qu'il faut pour comprendre un pod jamais pret (quota, image, noeud...) :
+    a appeler AVANT la suppression du Job, qui detruit ces informations."""
+    chunks = []
+    cmds = [
+        ["kubectl", "get", "job", job_name, "-n", namespace, "-o", "yaml"],
+        ["kubectl", "get", "pod", "-l", f"job-name={job_name}", "-n", namespace, "-o", "wide"],
+    ]
+    for pod in _pod_names(job_name, namespace)[:1]:
+        cmds.append(["kubectl", "describe", "pod", pod, "-n", namespace])
+    cmds.append(["kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp",
+                 "--field-selector", f"involvedObject.name={job_name}"])
+    cmds.append(["kubectl", "get", "resourcequota", "-n", namespace, "-o", "wide"])
+    for cmd in cmds:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            chunks.append(f"$ {' '.join(cmd)}\n{r.stdout}{r.stderr}")
+        except (subprocess.TimeoutExpired, OSError) as e:
+            chunks.append(f"$ {' '.join(cmd)}\n[erreur: {e}]")
+    return "\n\n".join(chunks)
 
 
 def check_binary(pod: str, namespace: str, binary: str, *, timeout: float = 15) -> bool:
@@ -162,7 +213,7 @@ def sweep_orphans(namespace: str, current_run_id: str, max_age_s: float, *,
     """Supprime les Jobs/Secrets `app=onyxia-agent-bench` d'un run different et plus vieux
     que `max_age_s` (pas un menage global - un autre run pourrait tourner en parallele
     dans le meme namespace)."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for kind in ("jobs", "secrets"):
         r = subprocess.run(["kubectl", "get", kind, "-n", namespace,
                             "-l", f"{LABEL_APP}={APP_VALUE}", "-o", "json"],

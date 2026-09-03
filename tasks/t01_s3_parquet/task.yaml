@@ -2,7 +2,14 @@ id: t01_s3_parquet
 tags: [s3, duckdb, platform-correctness]
 timeout_s: 900
 prompt: |
-  Avec le jeu de donnees ppl_census_2021 de mon bucket projet (Parquet partitionne sous
-  s3://mon-bucket/data/census/), calcule le revenu disponible median par departement et le
-  top 10 des communes par population. Ecris le resultat en Parquet dans data/derived/ du
-  bucket. Donne-moi un script reexecutable.
+  Le jeu de donnees ppl_census_2021 de mon bucket projet est en Parquet partitionne par
+  departement sous s3://mon-bucket/data/census/ (colonnes : code_commune, commune,
+  departement, population, revenu_disponible). Un miroir local des memes partitions est
+  present dans ce repertoire sous data/census/ pour developper et tester.
+  Ecris un script Python reexecutable qui calcule (1) le revenu disponible median par
+  departement et (2) le top 10 des communes par population, et ecrit chaque resultat en
+  Parquet dans data/derived/ du bucket (s3://mon-bucket/data/derived/).
+  Le script doit lire la source dans la variable d'environnement CENSUS_URI (defaut :
+  s3://mon-bucket/data/census/) et ecrire dans le prefixe OUTPUT_URI (defaut :
+  s3://mon-bucket/data/derived/), pour qu'on puisse le tester sur le miroir local avant de le
+  lancer sur la plateforme.

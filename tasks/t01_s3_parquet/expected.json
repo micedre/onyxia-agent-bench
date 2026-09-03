@@ -1,0 +1,57 @@
+{
+  "n_rows": 1174,
+  "median_revenu_by_departement": {
+    "01": 21147.9,
+    "13": 21416.2,
+    "2A": 21719.4,
+    "31": 21491.2,
+    "33": 21248.7,
+    "44": 22087.4,
+    "59": 21183.8,
+    "69": 21520.6,
+    "75": 21909.5,
+    "97": 21688.1
+  },
+  "top10_communes": [
+    {
+      "commune": "Pontlusy",
+      "population": 735879
+    },
+    {
+      "commune": "Brevilleville",
+      "population": 492974
+    },
+    {
+      "commune": "Ferboiseuil",
+      "population": 227213
+    },
+    {
+      "commune": "Pontor-sur-Lisle",
+      "population": 173820
+    },
+    {
+      "commune": "Briferan",
+      "population": 138892
+    },
+    {
+      "commune": "Tourcler-sur-Lisle",
+      "population": 124740
+    },
+    {
+      "commune": "Tourvalas",
+      "population": 97027
+    },
+    {
+      "commune": "Ferbreville",
+      "population": 89792
+    },
+    {
+      "commune": "Brichamières",
+      "population": 89280
+    },
+    {
+      "commune": "Ferferval",
+      "population": 88095
+    }
+  ]
+}

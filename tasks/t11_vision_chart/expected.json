@@ -1,0 +1,19 @@
+{
+  "unit": "milliers",
+  "values": {
+    "Valmoutier": 128,
+    "Saint-Orens-le-Haut": 342,
+    "Brizeval": 57,
+    "Monclery": 811,
+    "Aubrac-sur-Lisle": 203,
+    "Ferrandes": 466
+  },
+  "max": {
+    "commune": "Monclery",
+    "value": 811
+  },
+  "min": {
+    "commune": "Brizeval",
+    "value": 57
+  }
+}

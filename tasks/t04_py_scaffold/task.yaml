@@ -2,5 +2,7 @@ id: t04_py_scaffold
 tags: [reproducibility, python]
 timeout_s: 900
 prompt: |
-  Mets en place un nouveau projet Python reproductible pour cette analyse, a la maniere
-  de la plateforme (gestion d'environnement, lint, tests, structure).
+  Ce repertoire contient un script d'analyse `analyse.py` (pandas) qui utilise
+  `donnees_insee.csv`. Mets en place autour un projet Python reproductible, a la maniere de
+  la plateforme (gestion d'environnement et versions figees, lint, tests, structure), sans
+  casser l'analyse : elle doit rester executable et couverte par au moins un test.

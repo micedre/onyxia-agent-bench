@@ -1,8 +1,9 @@
 from pathlib import Path
+
 from bench.configs import load_ladder
-from bench.registry import discover_tasks
-from bench.opencode_driver import MockOpenCodeDriver
 from bench.mlflow_logging import NullLogger
+from bench.opencode_driver import MockOpenCodeDriver
+from bench.registry import discover_tasks
 from bench.runner import run_benchmark
 
 REPO = Path(__file__).resolve().parent.parent
