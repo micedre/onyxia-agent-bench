@@ -4,7 +4,6 @@ La verite terrain est dans expected.json (hors fixtures, l'agent ne la voit pas)
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 from pathlib import Path
@@ -119,8 +118,8 @@ def _score_outputs(out_dir: Path, ws: Path) -> list[Check]:
                 ok = sum(1 for k, v in exp_med.items() if k in got and abs(got[k] - v) <= 0.6)
                 frac = ok / len(exp_med) * fmt
                 if frac > best_med[0]:
-                    best_med = (frac, f"{p.name}: {ok}/{len(exp_med)} medianes exactes "
-                                      f"({dep_col} x {num_col})")
+                    best_med = (frac, (f"{p.name}: {ok}/{len(exp_med)} medianes exactes "
+                                       f"({dep_col} x {num_col})"))
         # top 10 : essayer TOUTES les colonnes, pas la premiere qui contient "commune"
         # (`code_commune` arrivait avant `commune` et donnait une intersection vide - 4/4
         # cellules a 0 alors que 3 avaient un top 10 parfait).
@@ -164,21 +163,17 @@ def grade(ctx):
     shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True)
     script = _pick_entry_script(ws, scripts)
-    env_backup = {k: os.environ.get(k) for k in ("CENSUS_URI", "OUTPUT_URI")}
-    os.environ["CENSUS_URI"] = "data/census"
-    os.environ["OUTPUT_URI"] = str(out_dir)
+    # `env_extra` passe les variables a l'ENFANT. Ne jamais poser CENSUS_URI/OUTPUT_URI dans
+    # os.environ : la notation tourne sur N threads et deux cellules t01 concurrentes se
+    # voleraient leurs chemins de sortie.
     try:
-        r, note = run_in_project(ws, ["python", str(_rel(ws, script))], timeout=300)
+        r, note = run_in_project(ws, ["python", str(_rel(ws, script))], timeout=300,
+                                 env_extra={"CENSUS_URI": "data/census",
+                                            "OUTPUT_URI": str(out_dir)})
         ok = r.returncode == 0
         checks.append(Check("script_runs", ok, 1.0 if ok else 0.0,
                             detail=f"{_rel(ws, script)} [{note}] {_tail(r)}"))
     except Exception as e:
         checks.append(Check("script_runs", False, 0.0, detail=f"erreur: {e}"))
-    finally:
-        for k, v in env_backup.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
     checks.extend(_score_outputs(out_dir, ws))
     return checks

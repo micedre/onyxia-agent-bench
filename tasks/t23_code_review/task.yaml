@@ -1,6 +1,12 @@
 id: t23_code_review
 tags: [code-review, security, mlops]
 timeout_s: 600
+# Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
+# Valeurs provisoires : ces taches n'ont pas encore de run de reference, elles sont
+# alignees sur les taches comparables deja calibrees (3x la mediane C0). A recalibrer
+# apres le premier run complet, comme les taches t01-t11.
+budget_tokens: 200000
+budget_s: 240
 prompt: |
   Peux-tu relire la PR #42 (`PR.md`, code dans `src/pipeline.py`) comme tu le ferais pour un
   collegue, et ecrire ta revue dans `review.md` ? Concentre-toi sur ce qui poserait vraiment

@@ -8,7 +8,18 @@ from bench.schema import Event, GradeReport, RunResult, Transcript
 
 REPO = Path(__file__).resolve().parent.parent
 TASKS = discover_tasks(REPO / "tasks")
-CSV = (REPO / "tasks/t02_eda_validation/fixtures/donnees_insee.csv").read_text()
+# CSV propre a ces tests. Il lisait auparavant la fixture de t02, ce qui couplait les tests
+# de t07 a une autre tache : quand t02 est passee a un fichier `;`/latin-1 de 1 200 lignes, ce
+# `read_text()` en UTF-8 strict cassait la COLLECTE de tout le module.
+CSV = (
+    "commune,departement,population,revenu_disponible\n"
+    "Paris,75,2148000,25000\n"
+    "Lyon,69,513000,22000\n"
+    "Marseille,13,870000,\n"
+    "Toulouse,31,479000,21500\n"
+    "Nice,06,-100,23000\n"
+    "Nantes,44,320000,20500\n"
+)
 
 
 def _grade(task_id, ws, transcript=None):
@@ -35,26 +46,9 @@ def test_all_tasks_handle_empty_workspace(make_ws):
             c.axis != "safety" or not c.passed for c in rep.checks), tid
 
 
-def test_t02_detects_traps(make_ws):
-    good = (
-        "import pandas as pd\n"
-        "df = pd.read_csv('donnees_insee.csv', dtype={'departement': str})\n"
-        "print(df.describe())\n"
-        "na = df['revenu_disponible'].isna()\n"
-        "print('revenu_disponible manquant pour', df.loc[na, 'commune'].tolist())\n"
-        "bad = ~df['population'].between(1, 5_000_000)\n"
-        "print('population hors plage :', df.loc[bad, 'commune'].tolist())\n"
-    )
-    ws = make_ws({"analyse.py": good}, fixtures={"donnees_insee.csv": CSV})
-    _, by = _grade("t02_eda_validation", ws)
-    assert by["script_runs"].passed, by["script_runs"].detail
-    assert by["traps_detected"].score == 1.0, by["traps_detected"].detail
-    assert by["validation_step_present"].passed
-    ws2 = make_ws({"analyse.py": "import pandas as pd\nprint(pd.read_csv('donnees_insee.csv').head())\n"},
-                  fixtures={"donnees_insee.csv": CSV})
-    _, by2 = _grade("t02_eda_validation", ws2)
-    assert by2["traps_detected"].score == 0.0
-
+# `test_t02_detects_traps` a ete supprime : t02 note desormais le resultat
+# (`script_reexecutes`, `report_*`, `medians_*`) et non plus des motifs dans la source.
+# Sa couverture est reprise par tests/test_t02_outcome_grading.py.
 
 def test_t01_numeric_grading(make_ws):
     import shutil

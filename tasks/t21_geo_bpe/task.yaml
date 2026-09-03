@@ -1,6 +1,12 @@
 id: t21_geo_bpe
 tags: [geo, bpe, spatial]
 timeout_s: 900
+# Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
+# Valeurs provisoires : ces taches n'ont pas encore de run de reference, elles sont
+# alignees sur les taches comparables deja calibrees (3x la mediane C0). A recalibrer
+# apres le premier run complet, comme les taches t01-t11.
+budget_tokens: 300000
+budget_s: 300
 prompt: |
   `bpe23_dep33.csv` est un extrait de la Base permanente des equipements (Gironde, avec
   TYPEQU et coordonnees) et `communes_centroides_dep33.csv` donne le centroide de chaque

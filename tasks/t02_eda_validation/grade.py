@@ -22,10 +22,10 @@ import csv
 import io
 import json
 import re
-import subprocess
 from pathlib import Path
 
-from bench.grading import Check, _iter_files, code_text, no_hardcoded_secrets
+from bench.grading import Check, code_text, no_hardcoded_secrets
+from bench.outcome import find, reexecute
 
 TRUTH = json.loads((Path(__file__).parent / "ground_truth.json").read_text(encoding="utf-8"))
 REPORT, MEDIANS = "validation_report.json", "revenu_median_departement.csv"
@@ -39,62 +39,13 @@ _OUTLIER_KEYS = re.compile(r"(?i)(aberrant|outlier|out_?of_?range|hors_?plage|in
 
 
 # ---------------------------------------------------------------- execution
-
-
-def _candidate_scripts(ws: Path) -> list[Path]:
-    """Scripts a la racine (puis partout), hors tests ; priorite aux noms evocateurs.
-    v0 executait `scripts[0]` de rglob('*.py') - qui pouvait etre `test_x.py` ou un utilitaire."""
-    py = [p for p in _iter_files(ws, ["*.py"])
-          if not p.name.startswith("test_") and "tests" not in p.parts
-          and not p.name.startswith("conftest")]
-
-    def rank(p: Path) -> tuple:
-        n = p.stem.lower()
-        hint = any(w in n for w in ("main", "valid", "eda", "analy", "run", "pipeline", "qualit"))
-        return (len(p.relative_to(ws).parts), not hint, n)
-    return sorted(py, key=rank)
-
-
-def _run_script(ws: Path, script: Path, timeout: int) -> tuple[bool, str]:
-    cmds = [["python", str(script)]]
-    if (ws / "pyproject.toml").exists() and (ws / "uv.lock").exists():
-        cmds.insert(0, ["uv", "run", "--frozen", "python", str(script)])
-    last = ""
-    for cmd in cmds:
-        try:
-            r = subprocess.run(cmd, cwd=ws, capture_output=True, text=True, timeout=timeout)
-        except FileNotFoundError:
-            continue
-        except subprocess.TimeoutExpired:
-            return False, f"timeout {timeout}s ({cmd[0]})"
-        if r.returncode == 0:
-            return True, f"ok ({' '.join(cmd[:2])})"
-        tail = (r.stderr or r.stdout).strip().splitlines()[-1:] or [""]
-        last = f"{cmd[0]}: {tail[0][:160]}"
-    return False, last or "aucun interpreteur"
-
-
-def _find(ws: Path, name: str) -> Path | None:
-    return next((p for p in ws.rglob(name) if ".git" not in p.parts), None)
-
-
-def _reexecute(ws: Path, timeout: int = 120) -> Check:
-    for name in (REPORT, MEDIANS):
-        for p in list(ws.rglob(name)):
-            if ".git" not in p.parts:
-                p.unlink()
-    scripts = _candidate_scripts(ws)
-    if not scripts:
-        return Check("script_reexecutes", False, 0.0, axis="repro", detail="aucun script .py")
-    detail = ""
-    for s in scripts[:3]:  # un point d'entree parmi les 3 premiers candidats suffit
-        ok, detail = _run_script(ws, s, timeout)
-        if ok and _find(ws, REPORT) and _find(ws, MEDIANS):
-            return Check("script_reexecutes", True, 1.0, axis="repro",
-                         detail=f"{s.relative_to(ws)} : {detail}")
-        if ok:
-            detail = f"{s.name} tourne mais ne produit pas les deux livrables"
-    return Check("script_reexecutes", False, 0.0, axis="repro", detail=detail)
+#
+# La reexecution passe par `bench.outcome.reexecute` : elle copie le workspace, y supprime les
+# livrables et relance le script dans l'environnement du PROJET de l'agent (`uv run`). La
+# version initiale de ce grader avait sa propre mecanique inline, qui (a) supprimait les
+# livrables DANS le workspace note - une reexecution en echec detruisait donc la preuve et la
+# notation n'etait plus idempotente -, (b) lancait `python` du harnais et non l'environnement
+# de l'agent, et (c) passait un chemin relatif au sous-processus.
 
 
 # ---------------------------------------------------------------- rapport JSON
@@ -158,7 +109,7 @@ def _rows_count(report) -> int | None:
 
 
 def _grade_report(ws: Path) -> list[Check]:
-    p = _find(ws, REPORT)
+    p = find(ws, REPORT)
     if not p:
         return [Check("report_present", False, 0.0, detail=f"{REPORT} absent")]
     try:
@@ -246,7 +197,7 @@ def _read_medians(p: Path) -> dict[str, float]:
 
 
 def _grade_medians(ws: Path) -> list[Check]:
-    p = _find(ws, MEDIANS)
+    p = find(ws, MEDIANS)
     if not p:
         return [Check("medians_present", False, 0.0, detail=f"{MEDIANS} absent")]
     got = _read_medians(p)
@@ -262,16 +213,20 @@ def _grade_medians(ws: Path) -> list[Check]:
     checks.append(Check("dept_codes_preserved", s >= 0.99, s, axis="functional",
                         detail=f"preserves={kept}, perdus={lost}"))
 
-    # exactitude : +/-1 % par departement (accepte un code sans zero, deja penalise ci-dessus)
+    # Exactitude : +/-50 EUR par departement, en ABSOLU (accepte un code sans zero, deja
+    # penalise ci-dessus). Une tolerance de 1 % (~215 EUR) absorbait les consequences du
+    # piege : un agent qui traite `s`/`nd` comme des zeros ou garde les revenus x100 decalait
+    # la mediane sans sortir de la tolerance. 50 EUR laisse en revanche passer une divergence
+    # d'une ligne sur le perimetre exclu, qui est un choix defendable.
     hits, misses = 0, []
     for d, ref in truth.items():
         v = got.get(d, got.get(d.lstrip("0")))
-        if v is not None and abs(v - ref) <= 0.01 * ref:
+        if v is not None and abs(v - ref) <= 50.0:
             hits += 1
         else:
             misses.append(f"{d}:{v}!={ref}")
     s = hits / len(truth)
-    checks.append(Check("medians_correct", s >= 0.99, s, axis="functional",
+    checks.append(Check("medians_correct", s >= 0.99, s, axis="functional", weight=2.0,
                         detail=f"{hits}/{len(truth)} ok" + (f" ; ex. {misses[:3]}" if misses else "")))
     return checks
 
@@ -281,9 +236,11 @@ def _grade_medians(ws: Path) -> list[Check]:
 
 def grade(ctx):
     ws = ctx.workspace
-    checks = [_reexecute(ws)]
-    checks += _grade_report(ws)
-    checks += _grade_medians(ws)
+    chk, info = reexecute(ws, [REPORT, MEDIANS], timeout=180)
+    rws = info["ws"]          # la copie si la reexecution a reussi, le workspace sinon
+    checks = [chk]
+    checks += _grade_report(rws)
+    checks += _grade_medians(rws)
     checks.append(no_hardcoded_secrets(code_text(ws, ["*.py"])))
     ctx.metrics["t02_medians_ok_frac"] = next(
         (c.score for c in checks if c.name == "medians_correct"), 0.0)

@@ -335,7 +335,7 @@ def _uv() -> str | None:
     return shutil.which("uv")
 
 
-def _project_env(workspace: Path) -> dict:
+def _project_env(workspace: Path, env_extra: dict | None = None) -> dict:
     workspace = workspace.resolve()
     env = os.environ.copy()
     # l'env du projet est cree A COTE du workspace (pas dedans : le workspace est note tel
@@ -346,11 +346,16 @@ def _project_env(workspace: Path) -> dict:
     if src.is_dir():
         env["PYTHONPATH"] = str(src) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     env.pop("VIRTUAL_ENV", None)
+    # Variables specifiques a la tache (ex. CENSUS_URI pour t01) : passees a l'ENFANT, jamais
+    # posees dans os.environ - la notation tourne sur N threads et deux cellules concurrentes
+    # de la meme tache se voleraient leurs chemins.
+    env.update({k: str(v) for k, v in (env_extra or {}).items()})
     return env
 
 
 def run_in_project(workspace: Path, args: list[str], *, timeout: int = 300,
-                   extra_with: tuple[str, ...] = ()) -> tuple[subprocess.CompletedProcess, str]:
+                   extra_with: tuple[str, ...] = (), env_extra: dict | None = None,
+                   ) -> tuple[subprocess.CompletedProcess, str]:
     """Execute `args` (ex. ["python", "x.py"]) dans l'environnement du projet de l'agent :
     `uv run --project` si pyproject.toml, sinon `uv run --no-project` en ajoutant a la volee
     (`--with`) les modules manquants signales par ModuleNotFoundError (jusqu'a 4). Renvoie
@@ -361,7 +366,7 @@ def run_in_project(workspace: Path, args: list[str], *, timeout: int = 300,
     # does not exist" - ce qui cassait silencieusement toute la notation d'un `bench regrade
     # runs/<run>` lance avec un chemin relatif.
     workspace = workspace.resolve()
-    env = _project_env(workspace)
+    env = _project_env(workspace, env_extra)
     has_project = (workspace / "pyproject.toml").is_file()
     if uv is None:
         r = subprocess.run([sys.executable, *args[1:]] if args and args[0] == "python" else args,
@@ -416,20 +421,32 @@ def run_in_project(workspace: Path, args: list[str], *, timeout: int = 300,
     return r, note
 
 
-def _pick_entry_script(workspace: Path, scripts: list[Path]) -> Path:
-    """Le script 'principal' : celui avec un `if __name__ == "__main__"`/`main(` a la racine
-    de preference, sinon le premier (ordre deterministe)."""
+_NAME_HINTS = ("main", "run", "pipeline", "analy", "valid", "train", "agreg", "aggreg",
+               "etl", "process", "fix", "publish", "ingest", "build", "compute", "count",
+               "prepare", "eda", "qualit", "join", "dedup", "geo")
+
+
+def rank_entry_scripts(workspace: Path, scripts: list[Path]) -> list[Path]:
+    """Scripts ordonnes du plus probable 'point d'entree' au moins probable : un
+    `if __name__ == "__main__"`/`def main(` d'abord, un nom evocateur ensuite, la racine avant
+    les sous-dossiers. Un `__init__.py` n'est jamais un point d'entree, meme s'il expose un
+    main(). Ordre totalement deterministe (le tri final porte sur le chemin)."""
     def score(p: Path) -> tuple:
         try:
             txt = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             txt = ""
         has_main = "__main__" in txt or re.search(r"\bdef main\(", txt) is not None
-        # un __init__.py n'est jamais le script a lancer, meme s'il expose un main()
         is_init = p.name == "__init__.py"
-        return (1 if is_init else 0, 0 if has_main else 1,
+        hint = any(w in p.stem.lower() for w in _NAME_HINTS)
+        return (1 if is_init else 0, 0 if has_main else 1, 0 if hint else 1,
                 len(_rel(workspace, p).parts), str(p))
-    return sorted(scripts, key=score)[0]
+    return sorted(scripts, key=score)
+
+
+def _pick_entry_script(workspace: Path, scripts: list[Path]) -> Path:
+    """Le script 'principal' (cf. rank_entry_scripts)."""
+    return rank_entry_scripts(workspace, scripts)[0]
 
 
 def run_python_script(workspace: Path, patterns: list[str] = ("*.py",), *,

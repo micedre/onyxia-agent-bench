@@ -1,6 +1,12 @@
 id: t14_fix_bug_script
 tags: [debugging, pandas, data-quality]
 timeout_s: 900
+# Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
+# Valeurs provisoires : ces taches n'ont pas encore de run de reference, elles sont
+# alignees sur les taches comparables deja calibrees (3x la mediane C0). A recalibrer
+# apres le premier run complet, comme les taches t01-t11.
+budget_tokens: 300000
+budget_s: 300
 prompt: |
   `agregat.py` sort chaque semaine le revenu median par departement a partir de
   `donnees_communes.csv`. Un collegue de la direction regionale de Corse dit que ses

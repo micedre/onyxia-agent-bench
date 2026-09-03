@@ -1,6 +1,12 @@
 id: t13_join_cog_epci
 tags: [join, cog, filosofi, data-quality]
 timeout_s: 900
+# Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
+# Valeurs provisoires : ces taches n'ont pas encore de run de reference, elles sont
+# alignees sur les taches comparables deja calibrees (3x la mediane C0). A recalibrer
+# apres le premier run complet, comme les taches t01-t11.
+budget_tokens: 600000
+budget_s: 420
 prompt: |
   J'ai `filosofi_communes_2021.csv` (revenu median MED21 et nb de menages fiscaux par
   commune, geographie 2023) et le COG 2025 (`cog_communes_2025.csv`, avec l'EPCI de chaque

@@ -7,3 +7,5 @@ __pycache__/
 _summary_tmp.json
 mlflow.db
 mlartifacts/
+patches/
+nohup.out

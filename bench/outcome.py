@@ -10,13 +10,12 @@ from __future__ import annotations
 import csv
 import io
 import json
-import os
 import re
-import resource
+import shutil
 import subprocess
 from pathlib import Path
 
-from bench.grading import Check, _iter_files
+from bench.grading import Check, deliverable_files, rank_entry_scripts, run_in_project
 
 # --------------------------------------------------------------------------- fichiers
 
@@ -26,92 +25,108 @@ def load_truth(task_file: str) -> dict:
 
 
 def find(ws: Path, name: str) -> Path | None:
-    """Premier fichier `name` (glob autorise) hors .git / caches."""
-    for p in ws.rglob(name):
-        if ".git" in p.parts or ".venv" in p.parts or "node_modules" in p.parts:
-            continue
-        if p.is_file():
-            return p
-    return None
+    """Premier LIVRABLE nomme `name` (glob autorise), ordre deterministe.
+
+    Delegue a `grading.deliverable_files`, donc exclut les fichiers deposes par les couches de
+    config. Sans cette exclusion, un `rglob` brut peut renvoyer un fichier de skill : le
+    gabarit `.opencode/skills/quarto-publication/assets/report-template.qmd` contient
+    `params:`, ce qui faisait passer un check de parametrage en C2/C3/C4 alors que l'agent
+    n'avait rien produit - un biais correle a la config mesuree.
+    """
+    files = deliverable_files(ws, [name])
+    return files[0] if files else None
 
 
-def remove_outputs(ws: Path, names: list[str]) -> None:
-    for n in names:
-        for p in list(ws.rglob(n)):
-            if ".git" not in p.parts and p.is_file():
-                p.unlink()
+def find_all(ws: Path, name: str) -> list[Path]:
+    return deliverable_files(ws, [name])
 
 
 # --------------------------------------------------------------------------- execution
 
 
-def candidate_scripts(ws: Path, exts: tuple[str, ...] = ("*.py",)) -> list[Path]:
-    """Scripts hors tests, racine d'abord, noms evocateurs d'abord."""
-    py = [p for p in _iter_files(ws, list(exts))
-          if not p.name.startswith("test_") and "tests" not in p.parts
-          and not p.name.startswith("conftest") and p.name != "setup.py"]
-
-    def rank(p: Path) -> tuple:
-        n = p.stem.lower()
-        hint = any(w in n for w in ("main", "run", "pipeline", "analy", "valid", "train",
-                                    "agreg", "aggreg", "etl", "process", "fix", "publish",
-                                    "ingest", "build", "compute", "count", "prepare"))
-        return (len(p.relative_to(ws).parts), not hint, n)
-    return sorted(py, key=rank)
+#: Repertoires qu'on ne recopie pas pour la reexecution (volumineux et regenerables).
+_COPY_IGNORE = shutil.ignore_patterns(".venv", "__pycache__", "node_modules", "*.pyc",
+                                      ".pytest_cache", ".ruff_cache", ".grade_venv")
 
 
-def run_script(ws: Path, script: Path, *, timeout: int = 180, env: dict | None = None,
-               mem_limit_mb: int | None = None) -> dict:
-    """Execute `script` (uv run --frozen si lockfile, sinon python). Renvoie
-    {ok, detail, peak_rss_mb}. `mem_limit_mb` pose un RLIMIT_AS dans l'enfant."""
-    full_env = {**os.environ, **(env or {})}
-    cmds = [["python", str(script)]]
-    if (ws / "pyproject.toml").exists() and (ws / "uv.lock").exists():
-        cmds.insert(0, ["uv", "run", "--frozen", "python", str(script)])
+def candidate_scripts(ws: Path, exts: tuple[str, ...] = ("*.py",),
+                      exclude_names: tuple[str, ...] = ()) -> list[Path]:
+    """Points d'entree plausibles, du plus probable au moins probable.
 
-    def preexec():
-        if mem_limit_mb:
-            lim = mem_limit_mb * 1024 * 1024
-            resource.setrlimit(resource.RLIMIT_AS, (lim, lim))
+    `deliverable_files` ecarte deja les couches de config, les tests et les brouillons `_x.py` ;
+    `rank_entry_scripts` prefere un `__main__`/`def main(`, puis un nom evocateur, puis la
+    racine. `exclude_names` sert aux fixtures executables qu'il ne faut jamais lancer (un
+    serveur de test lance comme candidat bloquerait jusqu'au timeout).
+    """
+    scripts = [p for p in deliverable_files(ws, list(exts)) if p.name not in exclude_names]
+    return rank_entry_scripts(ws, scripts)
 
-    last = "aucun interpreteur"
-    for cmd in cmds:
-        before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
-        try:
-            r = subprocess.run(cmd, cwd=ws, capture_output=True, text=True, timeout=timeout,
-                               env=full_env, preexec_fn=preexec)
-        except FileNotFoundError:
-            continue
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "detail": f"timeout {timeout}s", "peak_rss_mb": None}
-        peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / 1024  # kB -> MB (linux)
-        if r.returncode == 0:
-            return {"ok": True, "detail": f"ok ({cmd[0]})", "peak_rss_mb": max(peak, before / 1024)}
-        tail = (r.stderr or r.stdout).strip().splitlines()[-1:] or [""]
-        last = f"{cmd[0]}: {tail[0][:160]}"
-    return {"ok": False, "detail": last, "peak_rss_mb": None}
+
+def _run_one(ws: Path, script: Path, *, timeout: int, env_extra: dict | None) -> dict:
+    """Execute un script dans l'environnement du PROJET de l'agent (`uv run`), pas dans celui
+    du harnais : un agent qui a fait `uv add duckdb` doit pouvoir etre note (c'est le faux
+    negatif ModuleNotFoundError qui avait mis t04 `tests_pass` a 0/15). `run_in_project`
+    resout aussi le workspace en absolu - un chemin relatif ferait pointer le script hors du
+    cwd de l'enfant et mettrait a zero toute la notation d'un `bench regrade` en relatif."""
+    rel = script.resolve().relative_to(ws.resolve())
+    try:
+        r, note = run_in_project(ws, ["python", str(rel)], timeout=timeout, env_extra=env_extra)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "detail": f"timeout {timeout}s", "script": str(rel)}
+    except OSError as e:
+        return {"ok": False, "detail": f"erreur: {e}", "script": str(rel)}
+    if r.returncode == 0:
+        return {"ok": True, "detail": f"ok [{note}]", "script": str(rel), "stdout": r.stdout}
+    tail = (r.stderr or r.stdout or "").strip().splitlines()[-1:] or [""]
+    return {"ok": False, "detail": f"{rel} [{note}] {tail[0][:160]}", "script": str(rel),
+            "stdout": r.stdout}
 
 
 def reexecute(ws: Path, outputs: list[str], *, name: str = "script_reexecutes",
-              timeout: int = 180, env: dict | None = None, mem_limit_mb: int | None = None,
-              max_candidates: int = 3) -> tuple[Check, dict]:
-    """Supprime `outputs`, tente les scripts candidats jusqu'a ce que tous les livrables
-    existent. Renvoie (Check axe repro, info du run reussi ou dernier essai)."""
-    remove_outputs(ws, outputs)
-    scripts = candidate_scripts(ws)
+              timeout: int = 180, env: dict | None = None, max_candidates: int = 2,
+              exclude_names: tuple[str, ...] = (), exts: tuple[str, ...] = ("*.py",),
+              axis: str = "repro") -> tuple[Check, dict]:
+    """Verifie que les livrables se REGENERENT, sans jamais toucher au workspace note.
+
+    Le workspace est copie a cote (`<cellule>/.grade_rerun`), les livrables sont supprimes
+    DANS LA COPIE, puis les scripts candidats sont enchaines jusqu'a ce que tous les livrables
+    existent (un agent a le droit de separer validation.py et agregats.py).
+
+    Renvoie `(Check, info)` ou `info["ws"]` est le repertoire dans lequel lire les sorties :
+    la copie si la reexecution a reussi, le workspace d'origine sinon - de sorte qu'un livrable
+    correct garde le credit de son contenu meme si la reexecution echoue, et que deux notations
+    successives de la meme cellule donnent le meme resultat.
+    """
+    ws = ws.resolve()
+    rerun = ws.parent / ".grade_rerun"
+    shutil.rmtree(rerun, ignore_errors=True)
+    try:
+        shutil.copytree(ws, rerun, ignore=_COPY_IGNORE, symlinks=True)
+    except OSError as e:
+        return (Check(name, False, 0.0, axis=axis, detail=f"copie du workspace impossible: {e}"),
+                {"ws": ws})
+    for out in outputs:
+        for p in find_all(rerun, out):
+            p.unlink(missing_ok=True)
+
+    scripts = candidate_scripts(rerun, exts, exclude_names)
     if not scripts:
-        return Check(name, False, 0.0, axis="repro", detail="aucun script .py"), {}
+        return (Check(name, False, 0.0, axis=axis, detail=f"aucun script {list(exts)}"),
+                {"ws": ws})
     info: dict = {}
-    for s in scripts[:max_candidates]:
-        info = run_script(ws, s, timeout=timeout, env=env, mem_limit_mb=mem_limit_mb)
-        if info["ok"] and all(find(ws, o) for o in outputs):
-            info["script"] = str(s.relative_to(ws))
-            return Check(name, True, 1.0, axis="repro",
+    tried = []
+    for script in scripts[:max_candidates]:
+        info = _run_one(rerun, script, timeout=timeout, env_extra=env)
+        tried.append(info["detail"])
+        if all(find(rerun, o) for o in outputs):
+            info["ws"] = rerun
+            return Check(name, True, 1.0, axis=axis,
                          detail=f"{info['script']} : {info['detail']}"), info
-        if info["ok"]:
-            missing = [o for o in outputs if not find(ws, o)]
-            info["detail"] = f"{s.name} tourne mais ne produit pas {missing}"
-    return Check(name, False, 0.0, axis="repro", detail=info.get("detail", "")), info
+    missing = [o for o in outputs if not find(rerun, o)]
+    info["ws"] = ws  # repli : on note ce que l'agent a livre, sans le detruire
+    return (Check(name, False, 0.0, axis=axis,
+                  detail=f"livrables manquants apres reexecution {missing} ; essais: {tried}"),
+            info)
 
 
 # --------------------------------------------------------------------------- lecture tolerante
@@ -142,7 +157,7 @@ def read_table(p: Path) -> list[dict]:
 def pick_column(cols: list[str], patterns: list[str], exclude: set[str] = frozenset()) -> str | None:
     for pat in patterns:
         for c in cols:
-            if c and c not in exclude and re.search(pat, c, re.I):
+            if c and c not in exclude and re.search(pat, c, re.IGNORECASE):
                 return c
     return None
 
@@ -196,15 +211,23 @@ def compare_keyed(got: dict[str, float], truth: dict[str, float], *, name: str,
 
 def table_check(ws: Path, filename: str, truth: dict[str, float], *, name: str,
                 key_patterns: list[str], val_patterns: list[str], rel_tol: float = 0.01,
+                abs_tol: float = 0.0, weight: float = 1.0,
                 normalize_key=lambda s: s, alt_key=lambda k: k) -> list[Check]:
+    """Deux checks : la table est lisible, et ses valeurs correspondent a la verite terrain.
+
+    Penser a resserrer `rel_tol`/`abs_tol` par tache : le defaut de 1 % est trop large pour
+    des agregats, au point d'absorber le piege qu'on veut mesurer (sur t14, `mean` au lieu de
+    `median` passait inapercu dans 9 departements sur 13)."""
     p = find(ws, filename)
     if not p:
         return [Check(f"{name}_present", False, 0.0, detail=f"{filename} absent"),
-                Check(name, False, 0.0, detail="fichier absent")]
+                Check(name, False, 0.0, weight=weight, detail="fichier absent")]
     got = keyed_values(read_table(p), key_patterns, val_patterns, normalize_key=normalize_key)
+    cmp_check = compare_keyed(got, truth, name=name, rel_tol=rel_tol, abs_tol=abs_tol,
+                              alt_key=alt_key)
+    cmp_check.weight = weight
     return [Check(f"{name}_present", bool(got), 1.0 if got else 0.0,
-                  detail=f"{len(got)} ligne(s) lue(s)"),
-            compare_keyed(got, truth, name=name, rel_tol=rel_tol, alt_key=alt_key)]
+                  detail=f"{len(got)} ligne(s) lue(s)"), cmp_check]
 
 
 # --------------------------------------------------------------------------- JSON tolerant
@@ -244,7 +267,7 @@ def json_strings(o) -> set[str]:
 
 
 def json_int_under(o, key_re: str) -> int | None:
-    rx = re.compile(key_re, re.I)
+    rx = re.compile(key_re, re.IGNORECASE)
     for path, v in walk(o):
         if path and rx.search(path[-1]) and isinstance(v, (int, float)) and not isinstance(v, bool):
             return int(v)
@@ -283,9 +306,9 @@ def git_diff_stat_vs_initial(ws: Path, path: str) -> tuple[int, int]:
 
 def mlflow_runs(tracking_uri: str) -> list[dict]:
     """Runs (tous experiments) d'un store MLflow : {params, metrics, artifacts, tags}."""
-    import mlflow
     from mlflow.tracking import MlflowClient
-    mlflow.set_tracking_uri(tracking_uri)
+    # pas de mlflow.set_tracking_uri() : c'est un etat GLOBAL du processus, et le logger du
+    # harnais tourne en meme temps. Le client prend l'URI explicitement.
     c = MlflowClient(tracking_uri)
     out = []
     for exp in c.search_experiments():

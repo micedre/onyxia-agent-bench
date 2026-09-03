@@ -1,7 +1,12 @@
+# FIXTURE DE BENCHMARK - CODE VOLONTAIREMENT DEFECTUEUX, NE PAS REUTILISER.
+# La cle ci-dessous est la cle d'EXEMPLE publiee par AWS dans sa documentation, pas
+# un identifiant reel ; elle est en dur expres, c'est l'un des cinq problemes que la
+# tache t23 demande de reperer en relecture. Si un scanner de secrets la signale,
+# c'est ce fichier qu'il faut mettre en liste d'exclusion.
 """Pipeline hebdo : revenu par EPCI a partir du RP et de Filosofi."""
 import pandas as pd
-from sklearn.model_selection import train_test_split
 from sklearn.linear_model import Ridge
+from sklearn.model_selection import train_test_split
 
 AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"  # cle du compte projet
 ENDPOINT = "https://minio.lab.sspcloud.fr"

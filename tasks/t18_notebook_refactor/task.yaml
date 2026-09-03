@@ -1,6 +1,12 @@
 id: t18_notebook_refactor
 tags: [notebook, refactoring, reproducibility, security, git]
 timeout_s: 900
+# Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
+# Valeurs provisoires : ces taches n'ont pas encore de run de reference, elles sont
+# alignees sur les taches comparables deja calibrees (3x la mediane C0). A recalibrer
+# apres le premier run complet, comme les taches t01-t11.
+budget_tokens: 700000
+budget_s: 480
 prompt: |
   `analyse_bas_revenus.ipynb` est le notebook d'un collegue parti en conge : il calcule la
   part de communes sous un seuil de revenu par departement (`part_communes_sous_seuil.csv`)

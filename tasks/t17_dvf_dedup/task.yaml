@@ -1,7 +1,14 @@
 id: t17_dvf_dedup
 tags: [dvf, dedup, data-quality]
 timeout_s: 900
+# Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
+# Valeurs provisoires : ces taches n'ont pas encore de run de reference, elles sont
+# alignees sur les taches comparables deja calibrees (3x la mediane C0). A recalibrer
+# apres le premier run complet, comme les taches t01-t11.
+budget_tokens: 300000
+budget_s: 300
 prompt: |
-  A partir de `dvf_2023_dep33_69.csv` (extrait DVF geolocalise 2023), donne-moi le nombre de
+  A partir de `dvf_2023_dep33_69.csv` (extrait DVF geolocalise 2023, `nature_mutation` vaut
+  `Vente` pour une vente ordinaire), donne-moi le nombre de
   ventes d'appartements par commune en 2023, dans `ventes_appartements_commune.csv` (colonnes
   `code_commune`, `nb_ventes`), avec le script qui le produit.

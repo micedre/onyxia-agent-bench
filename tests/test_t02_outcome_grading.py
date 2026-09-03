@@ -20,7 +20,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 TASK = REPO / "tasks" / "t02_eda_validation"
 sys.path.insert(0, str(REPO / "scripts"))
-import gen_insee_fixture as gen  # noqa: E402
+import gen_insee_fixture as gen
 
 
 def _load_grader():

@@ -208,8 +208,10 @@ tasks/tXX_nom/
                        # Un fichier `X.untracked` est déposé sous le nom `X` : permet de
                        # versionner ici un `.env` que notre propre .gitignore bloquerait.
   grade.py             # def grade(ctx) -> list[Check]
-  expected.json, tools/  # (optionnel) vérité terrain + générateur de fixtures (t01, t11) —
-                         # hors fixtures/, donc invisibles pour l'agent
+  expected.json         # (optionnel) vérité terrain de t01/t11
+  ground_truth.json     # (optionnel) vérité terrain des tâches à notation sur résultat
+  tools/                # (optionnel) générateur déterministe de la fixture + de la vérité
+                        # Ces trois-là sont hors fixtures/, donc INVISIBLES pour l'agent
 ```
 
 `model:` dans `task.yaml` remplace le `--model` du run pour cette tâche (agent primaire et
@@ -228,9 +230,20 @@ tolérées), `gitignore_blocks` (sémantique `git check-ignore`, .gitignore imbr
 `best_effort_render`, `references_mlflow_api`, `mlflow_tracking_not_local`,
 `references_vault_api`, `yaml_documents`, `git_new_commit_made`, `file_committed`,
 `secret_not_committed`, `first_match_turn`, `bash_commands`, `transcript_contains`.
+
+Pour une tâche notée **sur résultat**, `bench/outcome.py` ajoute : `load_truth`, `find` /
+`find_all` (livrables uniquement, donc jamais un fichier de couche), `candidate_scripts`,
+`reexecute` (ré-exécution non destructive dans une copie), `read_table` (CSV avec séparateur et
+encodage devinés, ou Parquet), `keyed_values`, `compare_keyed` / `table_check` (crédit partiel,
+tolérance absolue ou relative), `walk` / `load_json` / `json_strings` / `json_int_under`,
+`git_history_contains`, `git_diff_stat_vs_initial`, `mlflow_runs`.
+
 Auto-découvert, aucune modification du cœur. Tests : `tests/test_grading.py` (helpers sur des
 workspaces « golden »), `tests/test_tasks.py` (chaque `grade.py` sur un bon et un mauvais
-workspace), `tests/test_parser.py` (vrai échantillon nd-JSON d'opencode).
+workspace), `tests/test_outcome_machinery.py` (invariants de la ré-exécution : rien de détruit,
+idempotence, pas de fichier de couche, chemin relatif accepté),
+`tests/test_outcome_tasks.py` et `tests/test_t02_outcome_grading.py` (une solution de référence
+et une solution naïve par tâche), `tests/test_parser.py` (vrai échantillon nd-JSON d'opencode).
 
 Exemple minimal :
 
@@ -261,42 +274,49 @@ def grade(ctx):
 
 `tasks/t02_eda_validation/fixtures/donnees_insee.csv` est généré par
 `scripts/gen_insee_fixture.py` (déterministe, stdlib) avec sa vérité terrain
-`ground_truth.json` (hors `fixtures/`, donc invisible pour l'agent). Le grader supprime les
-livrables, **ré-exécute** le script de l'agent (`uv run --frozen` si lockfile, sinon `python`),
-puis compare les sorties à la vérité terrain — les clés JSON/colonnes sont reconnues de façon
-tolérante (fr/en). Conséquence : l'environnement qui note doit disposer des libs qu'un agent
-utilise raisonnablement (`pandas`, `polars`, `duckdb`) ; en `--isolation pod`, c'est l'image
-du pod. Régénérer : `python scripts/gen_insee_fixture.py --out tasks/t02_eda_validation/fixtures/donnees_insee.csv --truth tasks/t02_eda_validation/ground_truth.json`.
+`ground_truth.json` (hors `fixtures/`, donc invisible pour l'agent). Le grader **ré-exécute**
+le script de l'agent dans une **copie** du workspace (`bench/outcome.py:reexecute`, via
+`run_in_project` donc dans l'environnement du projet de l'agent), puis compare les sorties à la
+vérité terrain — les clés JSON/colonnes sont reconnues de façon tolérante (fr/en). Deux
+invariants : la notation ne modifie jamais le workspace noté, et si la ré-exécution échoue on
+note quand même le livrable rendu par l'agent (donc deux notations successives d'une même
+cellule donnent le même score). Régénérer : `python scripts/gen_insee_fixture.py --out tasks/t02_eda_validation/fixtures/donnees_insee.csv --truth tasks/t02_eda_validation/ground_truth.json`.
 
-## Tâches « métier » (v1, t13–t24) : notation sur résultat
+## Tâches « métier » : notation sur résultat
 
-Ces tâches reproduisent une semaine de data scientist sur SSP Cloud. Chacune a des fixtures
-au schéma des vraies sources (Filosofi, COG, DVF géolocalisé, BPE, fichier détail RP),
+Ces tâches reproduisent une semaine de data scientist sur SSP Cloud. Chacune a des fixtures au
+schéma des vraies sources (Filosofi, COG + mouvements de communes, DVF géolocalisé, BPE),
 générées par `scripts/gen_task_fixtures.py` avec leur `ground_truth.json` (hors `fixtures/`,
 invisible pour l'agent). Le grader **ré-exécute** le script de l'agent (helpers dans
 `bench/outcome.py`) et compare les sorties à la vérité terrain, avec crédit partiel ; les
 prompts sont écrits comme une demande de collègue, sans checklist de bonnes pratiques — c'est
 au contexte (C1…C4) de les induire.
 
+Six tâches sont intégrées ici. Six autres (`t15`, `t16`, `t19`, `t20`, `t22`, `t24`) attendent
+dans la branche `wip/outcome-tasks-palier2-3` : elles demandent une reprise de conception avant
+de pouvoir mesurer ce qu'elles annoncent (piège des pondérations non noté pour `t15`, faux
+positifs du check de fuite pour `t16`, ré-exécution incompatible avec une sortie produite par
+le `.qmd` pour `t20`, journal de requêtes partagé entre cellules pour `t24`) — voir
+« Prochaines étapes ».
+
 | id | ce qu'elle sonde | piège planté | note |
 |---|---|---|---|
 | `t13_join_cog_epci` | jointure Filosofi (géo 2023) × COG 2025, moyenne pondérée par EPCI | 16 communes fusionnées entre millésimes | moyennes EPCI (0.5 si fusions écartées), codes non appariés signalés |
-| `t14_fix_bug_script` | corriger un script hebdo sans le réécrire | codes département passés en numérique (2A/2B perdus, 01→1), `mean` pour `median` | résultat + codes préservés + **minimalité du diff** |
-| `t15_outofcore_census` | agrégats pondérés sur le fichier détail RP (1 Go réel, échantillon local) | fichier > RAM | résultat via `CENSUS_PATH`, moteur paresseux, `peak_rss_mb` |
-| `t16_dvf_price_model` | modèle prix/m² + tracking MLflow | doublons de mutation, RMSE test sous le bruit = fuite | store SQLite jetable inspecté : params, métrique hold-out, modèle, graine, bat la baseline |
+| `t14_fix_bug_script` | corriger un script hebdo sans le réécrire | codes département passés en numérique (2A/2B perdus, 01→1), `mean` pour `median` | médianes comparées à **±1 €** (une tolérance relative absorbait le second bug), codes préservés, **minimalité du diff** |
 | `t17_dvf_dedup` | compter des ventes dans DVF | 1 mutation = n lignes (lots, parcelles) | comptes par commune (0.5 si comptage de lignes) |
-| `t18_notebook_refactor` | notebook désordonné → module testé et commité | jeton de session dans une sortie de cellule (notebook non suivi au départ) | résultat, tests, **jeton absent de l'historique git**, sorties nettoyées |
-| `t19_publish_diffusion` | publier un dérivé pour les autres utilisateurs | — | Parquet au bon schéma, README (source/millésime), dictionnaire complet, chemin `diffusion/`, creds via env |
-| `t20_quarto_param` | une fiche Quarto par région | — | CSV régional vs vérité, `params:` dans le frontmatter, mécanisme de rendu par région, rendu best-effort |
+| `t18_notebook_refactor` | notebook désordonné → module testé et commité | jeton de session dans une sortie de cellule (notebook non suivi au départ) | résultat, tests, **jeton absent de l'historique git**, sorties nettoyées (neutre si le notebook a été supprimé ou si rien n'est commité) |
 | `t21_geo_bpe` | pharmacies à < 5 km du centroïde | distance en degrés | comptes (haversine ±1) ; 0 si version « degrés » |
-| `t22_cron_argo` | exécution mensuelle sur le cluster | — | YAML **parsé** : CronWorkflow, cron mensuel, chemin S3 en paramètre, `secretKeyRef`, image, `argo lint` best-effort |
-| `t23_code_review` | relire une PR | 5 problèmes plantés (clé en dur, fichier entier en mémoire, jointure sur nom, pas de graine, rien de tracé) | grille sur le texte de la revue (inhérent à la tâche) + secret signalé comme bloquant |
-| `t24_api_ingestion` | API paginée → Parquet, sans re-télécharger | ETag / 304 | le grader lance le serveur mock, exécute 2 fois, lit le journal de requêtes |
+| `t23_code_review` | relire une PR | 5 problèmes plantés (clé en dur, fichier entier en mémoire, jointure sur nom, pas de graine, rien de tracé) | grille sur le texte de la revue (inhérent à la tâche) ; le constat de la clé en dur est noté, sa mise en avant est une métrique |
 
 **Environnement de notation** : les graders exécutent le code de l'agent, donc l'environnement
-qui note (ou l'image du pod en `--isolation pod`) doit contenir ce qu'un agent utilise
-raisonnablement : `pandas`, `pyarrow`, `duckdb`, `scikit-learn`, `mlflow` (extra
-`uv sync --extra grading`). `quarto` et `argo` sont optionnels (checks neutres s'ils manquent).
+qui note doit contenir ce qu'un agent utilise raisonnablement : `pandas`, `pyarrow`, `duckdb`,
+`scikit-learn`, `matplotlib`, `geopandas`/`pyproj`, `mlflow` — extra `grading` du
+`pyproject.toml` (`uv sync --extra grading --group dev` ; le groupe `dev` porte `pytest` et
+`ruff`, sans quoi un `uv sync` les élaguerait). `run_in_project` sait ajouter un module manquant
+à la volée (`uv run --with`), mais cela suppose un accès à l'index PyPI pendant la notation.
+`quarto`, `Rscript` et `argo` restent optionnels : un check qui en dépend est **neutre**
+(`skipped`) s'ils manquent, plutôt que noté 0 — l'agent, lui, tourne dans l'image de la
+plateforme, qui les a.
 
 **Fixtures réelles** : pour remplacer une fixture synthétique par un vrai extrait, déposer le
 fichier dans `fixtures/` avec le même schéma et recalculer `ground_truth.json` avec la même

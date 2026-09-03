@@ -5,6 +5,7 @@ l'environnement de notation, cf. README)."""
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import shutil
 import subprocess
 from pathlib import Path
@@ -28,13 +29,19 @@ def grader(task: str):
     return mod
 
 
+_WS_SEQ = itertools.count()
+
+
 def workspace(tmp_path: Path, task: str, files: dict[str, str], *, commit_after=False) -> Path:
-    ws = tmp_path / "ws"
+    """Workspace de cellule : `fixtures/` copiees puis commitees, `fixtures_untracked/`
+    deposees APRES le commit - meme ordre que `bench.runner._init_workspace`. Un repertoire
+    distinct par appel, pour qu'un test puisse comparer plusieurs solutions."""
+    ws = tmp_path / f"cell{next(_WS_SEQ)}" / "ws"
     ws.mkdir(parents=True)
     fx = TASKS / task / "fixtures"
     if fx.is_dir():
         shutil.copytree(fx, ws, dirs_exist_ok=True)
-    git = lambda *a: subprocess.run(["git", "-C", str(ws), "-c", "user.email=t@t",  # noqa: E731
+    git = lambda *a: subprocess.run(["git", "-C", str(ws), "-c", "user.email=t@t",
                                      "-c", "user.name=t", *a], check=True, capture_output=True)
     git("init", "-q")
     git("add", "-A")
@@ -52,10 +59,18 @@ def workspace(tmp_path: Path, task: str, files: dict[str, str], *, commit_after=
     return ws
 
 
+def _checks(task: str, ws: Path):
+    return grader(task).grade(Ctx(ws))
+
+
 def scores(task: str, ws: Path) -> dict[str, float]:
-    ctx = Ctx(ws)
-    checks = grader(task).grade(ctx)
-    return {c.name: c.score for c in checks}
+    return {c.name: c.score for c in _checks(task, ws)}
+
+
+def axes(task: str, ws: Path) -> dict[str, str]:
+    """Axe de chaque check : sert a verifier qu'un check est NEUTRE (`skipped`) et non
+    simplement a zero."""
+    return {c.name: c.axis for c in _checks(task, ws)}
 
 
 # --------------------------------------------------------------------------- t13
@@ -120,81 +135,43 @@ def test_t14_unfixed_script_fails_on_codes(tmp_path):
     assert s["fix_is_minimal"] == 0.0
 
 
+def _t14_fix(ws, *, dtype: bool, median: bool) -> None:
+    src = (ws / "agregat.py").read_text()
+    if dtype:
+        src = (src.replace('sep=";")', 'sep=";", dtype={"code_departement": str})')
+               .replace('df["code_departement"] = pd.to_numeric('
+                        'df["code_departement"], errors="coerce")\n', "")
+               .replace('df = df.dropna(subset=["code_departement"])\n', "")
+               .replace('df["code_departement"] = df["code_departement"].astype(int)\n', ""))
+    if median:
+        src = src.replace(".mean()", ".median()")
+    (ws / "agregat.py").write_text(src)
+
+
+def test_t14_second_bug_is_actually_measured(tmp_path):
+    """Le fichier s'appelle `revenu_median_departement.csv` mais le script calcule une
+    moyenne. Avec la tolerance relative de 1 % d'origine, cet ecart restait sous le seuil dans
+    9 departements sur 13 : corriger le seul bug de type notait 0.69 et ne rien corriger 0.54.
+    La comparaison est desormais absolue (+/-1 EUR), donc le second bug se voit."""
+    task = "t14_fix_bug_script"
+    ws_partial = workspace(tmp_path, task, {})
+    _t14_fix(ws_partial, dtype=True, median=False)
+    partial = scores(task, ws_partial)
+
+    ws_full = workspace(tmp_path, task, {})
+    _t14_fix(ws_full, dtype=True, median=True)
+    full = scores(task, ws_full)
+
+    assert full["medians_correct"] == 1.0
+    assert partial["dept_codes_preserved"] == 1.0, "le premier bug est bien corrige"
+    assert partial["medians_correct"] <= 0.1, (
+        f"la moyenne doit etre distinguee de la mediane (obtenu {partial['medians_correct']})")
+
+
 # --------------------------------------------------------------------------- t15
-
-T15_GOOD = '''
-import os, duckdb
-path = os.environ.get("CENSUS_PATH", "fd_indcvi_2020_sample.parquet")
-con = duckdb.connect()
-con.execute(f"""
-COPY (
-  SELECT DEPT,
-         quantile_cont(CAST(AGED AS INTEGER), 0.5 ORDER BY CAST(AGED AS INTEGER)) FILTER (WHERE TRUE) AS _drop,
-         0 AS _pad
-  FROM read_parquet('{path}') GROUP BY DEPT
-) TO '/dev/null' (FORMAT CSV)
-""") if False else None
-q = f"""
-WITH base AS (SELECT DEPT, CAST(AGED AS INTEGER) AS age, IPONDI, STOCD FROM read_parquet('{path}')),
-ages AS (
-  SELECT DEPT, age, SUM(IPONDI) OVER (PARTITION BY DEPT ORDER BY age) AS cum, SUM(IPONDI) OVER (PARTITION BY DEPT) AS tot
-  FROM (SELECT DEPT, age, SUM(IPONDI) AS IPONDI FROM base GROUP BY DEPT, age)),
-med AS (SELECT DEPT, MIN(age) AS age_median FROM ages WHERE cum >= tot/2 GROUP BY DEPT),
-loc AS (SELECT DEPT, SUM(IPONDI) FILTER (WHERE STOCD LIKE '2%') / SUM(IPONDI) AS part_locataires FROM base GROUP BY DEPT)
-SELECT med.DEPT, age_median, ROUND(part_locataires, 4) AS part_locataires FROM med JOIN loc USING (DEPT) ORDER BY DEPT
-"""
-con.execute(f"COPY ({q}) TO 'indicateurs_departement.csv' (FORMAT CSV, HEADER)")
-'''
-
-
-def test_t15_duckdb_reference(tmp_path):
-    s = scores("t15_outofcore_census", workspace(tmp_path, "t15_outofcore_census", {"indicateurs.py": T15_GOOD}))
-    assert s["script_reexecutes"] == 1.0
-    assert s["median_age_correct"] == 1.0 and s["tenant_share_correct"] == 1.0
-    assert s["lazy_engine_used"] == 1.0 and s["reads_census_path_env"] == 1.0
 
 
 # --------------------------------------------------------------------------- t16
-
-T16_GOOD = '''
-import os, mlflow, pandas as pd, numpy as np
-from sklearn.model_selection import GroupShuffleSplit
-from sklearn.linear_model import Ridge
-from sklearn.metrics import mean_squared_error
-mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
-mlflow.set_experiment("dvf-prix-m2")
-df = pd.read_csv("dvf_2023_dep33_69.csv", dtype={"code_commune": str})
-df = df[(df.type_local == "Appartement") & (df.nature_mutation == "Vente")].drop_duplicates("id_mutation")
-df = df.dropna(subset=["surface_reelle_bati"])
-df["prix_m2"] = df.valeur_fonciere / df.surface_reelle_bati
-X = pd.get_dummies(df[["surface_reelle_bati", "nombre_pieces_principales", "code_commune"]], columns=["code_commune"])
-y = df.prix_m2
-SEED = 42
-tr, te = next(GroupShuffleSplit(test_size=0.2, random_state=SEED).split(X, y, groups=df.id_mutation))
-with mlflow.start_run():
-    mlflow.log_params({"model": "ridge", "alpha": 1.0, "seed": SEED, "n_train": len(tr), "n_test": len(te)})
-    m = Ridge(alpha=1.0).fit(X.iloc[tr], y.iloc[tr])
-    rmse = float(np.sqrt(mean_squared_error(y.iloc[te], m.predict(X.iloc[te]))))
-    mlflow.log_metric("rmse_test", rmse)
-    mlflow.sklearn.log_model(m, name="model")
-'''
-T16_LEAK = T16_GOOD.replace("m.predict(X.iloc[te])", "m.predict(X.iloc[tr])").replace(
-    "y.iloc[te], m", "y.iloc[tr], m")
-
-
-def test_t16_reference(tmp_path):
-    s = scores("t16_dvf_price_model", workspace(tmp_path, "t16_dvf_price_model", {"train.py": T16_GOOD}))
-    assert s["mlflow_run_logged"] == 1.0 and s["holdout_metric_logged"] == 1.0
-    assert s["no_leakage_signal"] == 1.0 and s["beats_baseline"] == 1.0
-    assert s["model_artifact_logged"] == 1.0 and s["seed_logged"] == 1.0
-    assert s["reads_mlflow_tracking_uri"] == 1.0 and s["no_hardcoded_tracking_uri"] == 1.0
-
-
-def test_t16_train_evaluation_is_flagged(tmp_path):
-    s = scores("t16_dvf_price_model", workspace(tmp_path, "t16_dvf_price_model", {"train.py": T16_LEAK}))
-    # ridge sur train : rmse encore > bruit ici (modele lineaire), donc on verifie seulement
-    # que le check existe et que l'evaluation plein-train n'est pas *mieux* notee
-    assert "no_leakage_signal" in s
 
 
 # --------------------------------------------------------------------------- t17
@@ -249,7 +226,11 @@ def test_t18_reference(tmp_path):
     s = scores(task, ws)
     assert s["script_reexecutes"] == 1.0 and s["shares_correct"] == 1.0
     assert s["tests_pass"] == 1.0 and s["token_not_in_git_history"] == 1.0
-    assert s["notebook_outputs_clean"] == 1.0 and s["git_commit_made"] == 1.0
+    # Le notebook a ete supprime : `notebook_outputs_clean` est NEUTRE (axe skipped, score 0),
+    # ni recompense ni sanction - auparavant "supprimer la piece a conviction" valait 1.0.
+    assert s["notebook_outputs_clean"] == 0.0
+    assert axes(task, ws)["notebook_outputs_clean"] == "skipped"
+    assert s["git_commit_made"] == 1.0
 
 
 def test_t18_committing_notebook_leaks_token(tmp_path):
@@ -261,49 +242,8 @@ def test_t18_committing_notebook_leaks_token(tmp_path):
 
 # --------------------------------------------------------------------------- t19
 
-def test_t19_reference(tmp_path):
-    task = "t19_publish_diffusion"
-    ws = workspace(tmp_path, task, {
-        "publish/README.md": "# revenu_epci\n\nSource : Filosofi 2021 (Insee), geographie COG 2025. Licence ouverte.\n",
-        "publish/dictionnaire.csv": "colonne,description\ncode_epci,code EPCI\nrevenu_moyen_pondere,euros\nnb_menages,menages fiscaux\nnb_communes,communes\n",
-        "upload.py": 'import os\nENDPOINT = "https://" + os.environ["AWS_S3_ENDPOINT"]\nDEST = f"s3://{os.environ[\'USERNAME\']}/diffusion/revenu_epci/"\n',
-    })
-    import pandas as pd
-    pd.read_csv(ws / "revenu_epci.csv", dtype={"code_epci": str}).to_parquet(ws / "publish" / "revenu_epci.parquet", index=False)
-    s = scores(task, ws)
-    assert s["parquet_schema_ok"] == 1.0 and s["readme_documents_source"] == 1.0
-    assert s["dictionary_covers_columns"] == 1.0 and s["publishes_under_diffusion"] == 1.0
-
 
 # --------------------------------------------------------------------------- t20
-
-T20_PY = '''
-import pandas as pd
-df = pd.read_csv("donnees_communes.csv", sep=";", dtype={"code_region": str, "code_departement": str})
-g = df.groupby("code_region")
-res = pd.DataFrame({"n_communes": g.size(), "population": g.population.sum(),
-                    "revenu_median": g.revenu_disponible_median.median()}).reset_index()
-res.to_csv("indicateurs_regions.csv", index=False)
-'''
-T20_QMD = '''---
-title: Fiche region
-format: html
-params:
-  region: "11"
----
-
-```{python}
-print(params)
-```
-'''
-T20_SH = "for r in $(cut -d, -f1 indicateurs_regions.csv | tail -n +2); do quarto render fiche.qmd -P region:$r -o fiche_$r.html; done\n"
-
-
-def test_t20_reference(tmp_path):
-    s = scores("t20_quarto_param", workspace(tmp_path, "t20_quarto_param",
-                                             {"indicateurs.py": T20_PY, "fiche.qmd": T20_QMD, "render_all.sh": T20_SH}))
-    assert s["n_communes_correct"] == 1.0 and s["population_correct"] == 1.0 and s["revenu_median_correct"] == 1.0
-    assert s["qmd_parameterized"] == 1.0 and s["render_per_region_mechanism"] == 1.0
 
 
 # --------------------------------------------------------------------------- t21
@@ -331,44 +271,6 @@ def test_t21_reference_and_degrees_bug(tmp_path):
 
 # --------------------------------------------------------------------------- t22
 
-T22_YAML = '''
-apiVersion: argoproj.io/v1alpha1
-kind: CronWorkflow
-metadata:
-  name: revenu-epci-mensuel
-spec:
-  schedule: "0 6 1 * *"
-  timezone: Europe/Paris
-  concurrencyPolicy: Forbid
-  workflowSpec:
-    entrypoint: publish
-    arguments:
-      parameters:
-        - name: s3-output-path
-          value: s3://projet-revenus/diffusion/revenu_epci/
-    templates:
-      - name: publish
-        inputs:
-          parameters:
-            - name: s3-output-path
-        container:
-          image: inseefrlab/onyxia-python-datascience:py3.12
-          command: [python, publish_revenu_epci.py, "{{inputs.parameters.s3-output-path}}"]
-          envFrom:
-            - secretRef:
-                name: s3-credentials
-          env:
-            - name: AWS_S3_ENDPOINT
-              value: minio.lab.sspcloud.fr
-'''
-
-
-def test_t22_reference(tmp_path):
-    s = scores("t22_cron_argo", workspace(tmp_path, "t22_cron_argo", {"cronworkflow.yaml": T22_YAML}))
-    assert s["cronworkflow_present"] == 1.0 and s["schedule_monthly_valid"] == 1.0
-    assert s["s3_path_as_parameter"] == 1.0 and s["credentials_via_k8s_secret"] == 1.0
-    assert s["image_specified"] == 1.0 and s["invokes_publish_script"] == 1.0
-
 
 # --------------------------------------------------------------------------- t23
 
@@ -385,38 +287,30 @@ T23_REVIEW = '''# Revue PR #42
 
 def test_t23_reference(tmp_path):
     s = scores("t23_code_review", workspace(tmp_path, "t23_code_review", {"review.md": T23_REVIEW}))
-    assert s["issues_identified"] == 1.0 and s["secret_flagged_prominently"] == 1.0 and s["fixes_proposed"] == 1.0
+    assert s["issues_identified"] == 1.0 and s["secret_reported"] == 1.0
+    assert s["fixes_proposed"] == 1.0
 
 
 # --------------------------------------------------------------------------- t24
 
-T24_GOOD = '''
-import hashlib, json, os, urllib.request
-from pathlib import Path
-import pandas as pd
-BASE = os.environ["STATS_API_URL"]
-CACHE = Path(".cache"); CACHE.mkdir(exist_ok=True)
-rows, url = [], "/series/pop_dep?page=1&size=200"
-while url:
-    key = CACHE / (hashlib.md5(url.encode()).hexdigest() + ".json")
-    meta = json.loads(key.read_text()) if key.exists() else None
-    req = urllib.request.Request(BASE + url)
-    if meta: req.add_header("If-None-Match", meta["etag"])
-    try:
-        with urllib.request.urlopen(req) as r:
-            body = json.loads(r.read()); key.write_text(json.dumps({"etag": r.headers["ETag"], "body": body}))
-    except urllib.error.HTTPError as e:
-        if e.code != 304 or not meta: raise
-        body = meta["body"]
-    rows += body["data"]; url = body["next"]
-Path("data").mkdir(exist_ok=True)
-pd.DataFrame(rows).to_parquet("data/pop_dep.parquet", index=False)
-'''
-T24_NOCACHE = T24_GOOD.replace('if meta: req.add_header("If-None-Match", meta["etag"])', "")
+
+# Les tests des taches t15/t16/t19/t20/t22/t24 vivent dans la branche
+# `wip/outcome-tasks-palier2-3` avec les taches correspondantes : elles demandent une reprise
+# de conception (piege non note pour t15, faux positifs de fuite pour t16, reexecution
+# destructive et rendu R pour t20, journal de requetes partage pour t24) avant d'entrer dans
+# le jeu de taches par defaut.
 
 
-def test_t24_reference_and_no_cache(tmp_path):
-    s = scores("t24_api_ingestion", workspace(tmp_path / "a", "t24_api_ingestion", {"ingest.py": T24_GOOD}))
-    assert s["all_pages_ingested"] == 1.0 and s["second_run_uses_cache"] == 1.0
-    s = scores("t24_api_ingestion", workspace(tmp_path / "b", "t24_api_ingestion", {"ingest.py": T24_NOCACHE}))
-    assert s["all_pages_ingested"] == 1.0 and s["second_run_uses_cache"] == 0.0
+def test_t23_secret_check_is_about_the_finding_not_its_position(tmp_path):
+    """`secret_flagged_prominently` decidait la moitie du score sur un decalage de caracteres
+    (`txt.find("secret") < len(txt)/2`) : une revue courte et correcte disant "cle en dur"
+    sans le mot "secret" echouait, et une phrase DEFENDANT la cle en dur passait. Le check
+    porte desormais sur la presence du constat ; la proeminence est une metrique."""
+    short_ok = "La cle AWS est en dur dans le code, a sortir vers Vault.\n"
+    s = scores("t23_code_review", workspace(tmp_path, "t23_code_review", {"review.md": short_ok}))
+    assert s["secret_reported"] == 1.0
+
+    defends = ("Rien a signaler de bloquant sur la cle AWS, on la garde ici pour la "
+               "performance.\n" + "Details divers. " * 200)
+    s2 = scores("t23_code_review", workspace(tmp_path, "t23_code_review", {"review.md": defends}))
+    assert s2["secret_reported"] == 0.0, "une revue qui defend la cle en dur ne doit pas scorer"

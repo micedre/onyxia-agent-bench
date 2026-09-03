@@ -162,6 +162,16 @@ def grade_run(task: TaskSpec, run: RunResult) -> tuple[GradeReport, GradeContext
     return GradeReport(checks), ctx
 
 
+#: Copie de travail creee par `bench.outcome.reexecute` pour reexecuter le script de l'agent
+#: sans toucher au workspace note. Une fois la cellule notee elle n'a plus d'utilite (les
+#: livrables d'origine sont intacts dans `ws/`) et peut peser autant que le workspace.
+RERUN_DIR = ".grade_rerun"
+
+
+def _cleanup_rerun(cell_dir: Path) -> None:
+    shutil.rmtree(cell_dir / RERUN_DIR, ignore_errors=True)
+
+
 def _write_cell_artifacts(cell_dir: Path, run: RunResult, report: GradeReport,
                           ctx: GradeContext):
     cell_dir.mkdir(parents=True, exist_ok=True)
@@ -200,6 +210,7 @@ def run_cell(task: TaskSpec, config: ConfigSpec, base: str, configs_dir: Path,
     run.files_changed = _changed_files(ws)
     report, ctx = grade_run(task, run)
     _write_cell_artifacts(cell_dir, run, report, ctx)
+    _cleanup_rerun(cell_dir)
     return run, report, ctx
 
 
@@ -459,6 +470,7 @@ def regrade_run(run_dir: Path, tasks: dict[str, TaskSpec], out_dir: Path | None 
             json.dumps({**report.to_dict(), "metrics": ctx.metrics, "status": run.status,
                         "error": run.error}, indent=2, ensure_ascii=False), encoding="utf-8")
         records.append(_build_rec(task_id, config_id, seed, run, report, ctx.metrics))
+        _cleanup_rerun(cell_dir)
     configs = meta.get("configs") or sorted({r["config"] for r in records})
     summary, _ = _finalize(records, out_dir, meta, configs[0], configs[-1])
     return summary

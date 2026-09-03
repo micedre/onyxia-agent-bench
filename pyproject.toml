@@ -9,14 +9,30 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# environnement de notation des tasks t13+ (le code de l'agent est re-execute)
-grading = ["pandas>=2.2", "pyarrow>=15", "duckdb>=1.0", "scikit-learn>=1.4", "numpy>=1.26"]
+# Environnement de NOTATION des taches a resultat (t02, t13+) : le code de l'agent y est
+# re-execute, donc il doit contenir ce qu'un agent utilise raisonnablement pour ces jeux de
+# donnees. `bench.grading.run_in_project` sait ajouter a la volee (`uv run --with`) un module
+# manquant signale par un ModuleNotFoundError, mais cela suppose un acces a l'index PyPI
+# pendant la notation : mieux vaut avoir les usuels installes.
+grading = [
+    "pandas>=2.2", "pyarrow>=15", "duckdb>=1.0", "scikit-learn>=1.4", "numpy>=1.26",
+    "matplotlib>=3.8",                      # graphiques (rapports Quarto, figures)
+    "geopandas>=1.0", "pyproj>=3.6",        # jointures spatiales / reprojection (t21)
+]
+
+[dependency-groups]
+# Outils de developpement du harnais lui-meme. Declares pour qu'un `uv sync` ne les elague pas
+# de l'environnement (la suite de tests en depend).
+dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 bench = "bench.cli:main"
 
 [tool.ruff]
 line-length = 100
+# Fixture volontairement cassee (cellules executees dans le desordre, variable utilisee avant
+# sa redefinition) : c'est l'objet meme de la tache t18, la linter n'a pas de sens ici.
+extend-exclude = ["tasks/t18_notebook_refactor/fixtures_untracked/*.ipynb"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
