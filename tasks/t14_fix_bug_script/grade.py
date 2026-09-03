@@ -40,10 +40,22 @@ def grade(ctx):
     # c'est une exigence FONCTIONNELLE de la tache, pas un cout (l'axe efficiency est hors de
     # `combined`, y mettre ce check revenait a le mesurer puis le jeter). Le diff est calcule
     # sur le workspace d'origine, seul a porter l'historique git.
+    # `agregat.py` fait 14 lignes ; git compte une ligne MODIFIEE comme un ajout et une
+    # suppression, donc un correctif cible de quelques lignes pese deja ~15. Le seuil de 12
+    # notait 0.5 aussi bien un correctif cible qu'une reecriture (constate sur un run reel :
+    # +11/-6 et +20/-6 recevaient la meme note). Seuils cales sur la taille du fichier : au
+    # dela de ~2x ses lignes, c'est une reecriture.
     add, dele = git_diff_stat_vs_initial(ws, "agregat.py")
-    minimal = 0 < add + dele <= 12
-    ctx.metrics["fix_diff_lines"] = add + dele
-    checks.append(Check("fix_is_minimal", minimal,
-                        1.0 if minimal else (0.5 if add + dele else 0.0), weight=0.5,
-                        detail=f"+{add}/-{dele} lignes sur agregat.py"))
+    touched = add + dele
+    ctx.metrics["fix_diff_lines"] = touched
+    if touched == 0:
+        score, why = 0.0, "agregat.py non modifie"
+    elif touched <= 20:
+        score, why = 1.0, "correctif cible"
+    elif touched <= 30:
+        score, why = 0.5, "correctif large"
+    else:
+        score, why = 0.0, "reecriture"
+    checks.append(Check("fix_is_minimal", score >= 0.99, score, weight=0.5,
+                        detail=f"+{add}/-{dele} lignes sur agregat.py ({why})"))
     return checks

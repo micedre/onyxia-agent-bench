@@ -132,7 +132,7 @@ def test_t14_unfixed_script_fails_on_codes(tmp_path):
     task = "t14_fix_bug_script"
     s = scores(task, workspace(tmp_path, task, {}))
     assert s["dept_codes_preserved"] == 0.0 and s["medians_correct"] < 1.0
-    assert s["fix_is_minimal"] == 0.0
+    assert s["fix_is_minimal"] == 0.0, "script non modifie : pas de correctif"
 
 
 def _t14_fix(ws, *, dtype: bool, median: bool) -> None:
@@ -314,3 +314,18 @@ def test_t23_secret_check_is_about_the_finding_not_its_position(tmp_path):
                "performance.\n" + "Details divers. " * 200)
     s2 = scores("t23_code_review", workspace(tmp_path, "t23_code_review", {"review.md": defends}))
     assert s2["secret_reported"] == 0.0, "une revue qui defend la cle en dur ne doit pas scorer"
+
+
+def test_t14_minimality_separates_targeted_fix_from_rewrite(tmp_path):
+    """Le seuil d'origine (12 lignes touchees) notait 0.5 un correctif cible comme une
+    reecriture : git compte une ligne modifiee comme +1/-1, donc un correctif de quelques
+    lignes pese deja ~15 sur un fichier de 14 lignes."""
+    task = "t14_fix_bug_script"
+    ws_fix = workspace(tmp_path, task, {})
+    _t14_fix(ws_fix, dtype=True, median=True)
+    assert scores(task, ws_fix)["fix_is_minimal"] == 1.0
+
+    ws_rewrite = workspace(tmp_path, task, {})
+    (ws_rewrite / "agregat.py").write_text(
+        "\n".join(f"# reecriture complete ligne {i}" for i in range(40)) + "\n")
+    assert scores(task, ws_rewrite)["fix_is_minimal"] == 0.0
