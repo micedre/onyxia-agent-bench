@@ -6,7 +6,7 @@ tags: [mlflow, training, python]
 # plateforme" sans dire comment ; notation objective (params et metriques loggues, pas de
 # tracking local en dur).
 suite: context
-timeout_s: 900
+timeout_s: 2400
 # Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
 # Calibres a 3x la mediane observee de la config nue C0 sur le run de reference
 # qwen3-6-f278654 (plancher 150k tokens / 180 s) : une cellule au cout median de C0

@@ -5,7 +5,7 @@ tags: [code-review, security, mlops]
 # Delta apparié C4-C0 mesure sur le run qwen3-6-all, +0.20 : l'enonce demande une relecture
 # "comme pour un collegue", sans lister les problemes a trouver.
 suite: context
-timeout_s: 600
+timeout_s: 1500
 # Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
 # Valeurs provisoires : ces taches n'ont pas encore de run de reference, elles sont
 # alignees sur les taches comparables deja calibrees (3x la mediane C0). A recalibrer

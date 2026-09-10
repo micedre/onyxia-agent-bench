@@ -6,7 +6,7 @@ tags: [notebook, refactoring, reproducibility, security, git]
 # : le contexte fait sur-construire l'agent (aucune cellule C4 ne commite, contre 4/5 en C0).
 # Une suite ou C4 gagne partout demontrerait son resultat par construction.
 suite: context
-timeout_s: 900
+timeout_s: 2400
 # Budgets de l'axe efficiency (diagnostic ; n'entre pas dans `combined`).
 # Valeurs provisoires : ces taches n'ont pas encore de run de reference, elles sont
 # alignees sur les taches comparables deja calibrees (3x la mediane C0). A recalibrer
