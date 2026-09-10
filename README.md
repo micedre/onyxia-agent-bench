@@ -121,10 +121,14 @@ plateforme. Visualiser : `mlflow ui --backend-store-uri sqlite:///mlflow.db`.
 
 ## Isolation par pod (`--isolation pod`)
 
-`--isolation process` (défaut) lance `opencode` en sous-processus local, `cwd` pointé sur le
-répertoire de la cellule — mais les outils d'OpenCode (`read`, `glob`, …) ne respectent pas
-forcément ce `cwd` : un run réel a pu lister/globber tout le dépôt du harnais (`.env` compris)
-depuis une cellule. `--isolation pod` corrige ça en exécutant chaque cellule dans un **Job
+`--isolation process` (défaut) lance `opencode` en sous-processus local, le répertoire de la
+cellule étant passé par `--dir` **et** `PWD`. Les deux sont nécessaires : `opencode run` résout
+son répertoire de session depuis `$PWD` et non depuis le `cwd` du process, si bien qu'un
+`subprocess(cwd=…)` seul laissait l'agent travailler dans le dépôt du harnais — le run
+`bench-20260908-134041` a ainsi vu ses 30 cellules lire, écrire et **commiter dans
+onyxia-agent-bench**, workspaces restés vides et tous les scores à 0. Même corrigé, ce mode
+n'est pas une frontière de sécurité : rien n'empêche l'agent d'atteindre le reste de l'hôte
+(`.env` compris) par chemin absolu. `--isolation pod` corrige ça en exécutant chaque cellule dans un **Job
 Kubernetes éphémère** dont le système de fichiers du conteneur *est* la frontière d'isolation —
 rien d'autre que le workspace poussé n'y existe.
 

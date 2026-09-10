@@ -1,9 +1,11 @@
 """Pilotage d'OpenCode.
 
 RealOpenCodeDriver : lance `opencode run -m <provider/model> --format json "<prompt>"`
-dans le workspace isole, capture la sortie et la transforme en Transcript. Isolation
-"legere" : sous-repertoire + git sur le systeme de fichiers de l'hote (voir les limites
-connues du README - les outils d'OpenCode ne respectent pas forcement `cwd`).
+dans le workspace isole (`--dir` + `PWD` : `opencode run` resout son repertoire depuis
+$PWD, pas depuis le cwd du process), capture la sortie et la transforme en Transcript.
+Isolation "legere" : sous-repertoire + git sur le systeme de fichiers de l'hote, donc pas
+une frontiere de securite - l'agent peut toujours sortir du workspace par chemin absolu
+(voir `--isolation pod` et les limites connues du README).
 
 PodOpenCodeDriver : meme contrat, mais l'agent tourne dans un Job/pod Kubernetes ephemere
 (`--isolation pod`) - le systeme de fichiers du conteneur est la frontiere d'isolation,
@@ -209,11 +211,22 @@ class RealOpenCodeDriver(BaseDriver):
         # opencode lit opencode.json depuis le cwd ; on force aussi OPENCODE_CONFIG.
         env["OPENCODE_CONFIG"] = str(workspace / "opencode.json")
         env.setdefault("CI", "1")  # signale un contexte non interactif
+        # PWD : `opencode run` resout son repertoire de session depuis $PWD, pas depuis le
+        # cwd reel du process. subprocess(cwd=...) change le cwd mais laisse PWD herite du
+        # lanceur, donc l'agent travaillait dans le depot du harnais et non dans la cellule
+        # (run bench-20260908-134041 : les 30 cellules ont commite dans onyxia-agent-bench,
+        # workspaces vides, tous les scores a 0). Redondant avec --dir ci-dessous, garde
+        # parce que les deux corrigent le probleme independamment (verifie empiriquement).
+        env["PWD"] = str(workspace)
         # --agent build : sans lui, opencode retombe sur `default_agent` (souvent "plan" dans
         # la config globale onyxia, qui REFUSE toute edition - cf. README) et aucune tache ne
         # peut jamais rien ecrire.
-        cmd = [self.binary, "run", "--agent", "build", "-m", model, "--format", "json",
-              task.prompt]
+        # --dir : indique explicitement a opencode le repertoire de la cellule. Sans lui,
+        # `cwd=workspace` ne suffit pas (cf. PWD ci-dessus) et l'agent lit, ecrit et commite
+        # dans le depot du harnais.
+        cmd = [self.binary, "run", "--dir", str(workspace),
+               "--agent", "build", "-m", model, "--format", "json",
+               task.prompt]
         # XDG_CONFIG_HOME/XDG_DATA_HOME isoles : sans ca, opencode lit la vraie install
         # opencode-onyxia globale de la machine (~/.config/opencode : prompts, skills,
         # sous-agents, permissions) pour TOUTES les configs y compris C0, ce qui rend
