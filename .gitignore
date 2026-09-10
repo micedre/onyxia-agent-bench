@@ -1,4 +1,12 @@
-runs/
+# runs/ pese des dizaines de Go (workspaces par cellule, raw.ndjson, venvs de notation) et
+# n'a pas sa place dans Git. On garde uniquement les deux artefacts de synthese de chaque run
+# (1,7 Mo au total) : ce sont eux qui portent les chiffres cites dans l'abstract NTTS, et sans
+# eux plus personne ne peut verifier un resultat une fois le service detruit.
+/runs/*
+!/runs/*/
+/runs/*/*
+!/runs/*/summary.json
+!/runs/*/report.md
 mlruns/
 __pycache__/
 *.pyc
