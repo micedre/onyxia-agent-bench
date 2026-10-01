@@ -21,8 +21,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from bench.configs import materialize
-from bench.opencode_driver import BaseDriver, parse_output
+from bench.agents import materialize, parse_transcript
+from bench.opencode_driver import BaseDriver
 from bench.report import render_markdown
 from bench.schema import (
     AXES,
@@ -200,12 +200,16 @@ def _write_cell_artifacts(cell_dir: Path, run: RunResult, report: GradeReport,
 
 
 def run_cell(task: TaskSpec, config: ConfigSpec, base: str, configs_dir: Path,
-             model: str, seed: int, driver: BaseDriver, cell_dir: Path) -> tuple:
+             model: str, seed: int, driver: BaseDriver, cell_dir: Path,
+             agent: str = "opencode") -> tuple:
     ws = cell_dir / "ws"
     _init_workspace(ws, task)
-    materialize(config, configs_dir, base, ws, model=task.model or model)
+    # `task.model` (ex. modele vision de t11) est un modele du fournisseur opencode : il ne
+    # s'applique pas a un autre agent, dont le --model est celui du run.
+    cell_model = (task.model or model) if agent == "opencode" else model
+    materialize(agent, config, configs_dir, base, ws, model=cell_model)
 
-    run: RunResult = driver.run(task, ws, task.model or model, seed, config.id)
+    run: RunResult = driver.run(task, ws, cell_model, seed, config.id)
     _prune_noise(ws)
     run.files_changed = _changed_files(ws)
     report, ctx = grade_run(task, run)
@@ -349,6 +353,7 @@ def _build_rec(task_id: str, config_id: str, seed: int, run: RunResult,
         "tokens_total": t.tokens_total,
         "tokens_in": t.tokens_in, "tokens_out": t.tokens_out,
         "tokens_reasoning": t.tokens_reasoning,
+        "tokens_cache_read": t.tokens_cache_read,
         "context_tokens_first": t.context_tokens_first,
         "context_tokens_last": t.context_tokens_last,
         "cost": round(t.cost, 6),
@@ -390,7 +395,8 @@ def _finalize(records: list[dict], out_dir: Path, meta: dict, low: str, high: st
 
 def run_benchmark(tasks: list[TaskSpec], configs: list[ConfigSpec], base: str,
                   configs_dir: Path, model: str, seeds: int, driver: BaseDriver,
-                  out_dir: Path, logger, workers: int = 1, meta: dict | None = None) -> dict:
+                  out_dir: Path, logger, workers: int = 1, meta: dict | None = None,
+                  agent: str = "opencode") -> dict:
     records: list[dict] = []
     lock = threading.Lock()
     cells = [(task, config, seed, out_dir / task.id / config.id / f"seed{seed}")
@@ -400,7 +406,7 @@ def run_benchmark(tasks: list[TaskSpec], configs: list[ConfigSpec], base: str,
     def run_and_finalize(task: TaskSpec, config: ConfigSpec, seed: int, cell_dir: Path):
         try:
             run, report, ctx = run_cell(task, config, base, configs_dir,
-                                        model, seed, driver, cell_dir)
+                                        model, seed, driver, cell_dir, agent=agent)
             rec = _build_rec(task.id, config.id, seed, run, report, ctx.metrics)
         except Exception as e:  # une cellule ne doit jamais casser tout le run
             run = None
@@ -414,7 +420,7 @@ def run_benchmark(tasks: list[TaskSpec], configs: list[ConfigSpec], base: str,
             _print_cell(rec)
 
     meta = dict(meta or {})
-    meta.update({"run_name": out_dir.name, "model": model, "seeds": seeds,
+    meta.update({"run_name": out_dir.name, "agent": agent, "model": model, "seeds": seeds,
                  "tasks": [t.id for t in tasks], "configs": [c.id for c in configs]})
     with logger:
         if hasattr(logger, "log_meta"):
@@ -457,7 +463,7 @@ def regrade_run(run_dir: Path, tasks: dict[str, TaskSpec], out_dir: Path | None 
         else:
             tj = json.loads((cell_dir / "transcript.json").read_text(encoding="utf-8"))
             raw = tj.get("text", "")  # anciens runs : le texte etait le stdout brut
-        transcript = parse_output(raw)
+        transcript = parse_transcript(meta.get("agent", "opencode"), raw)
         run = RunResult(task_id, config_id, meta.get("model", "?"), seed, ws, transcript,
                         exit_code=orec.get("exit_code", 1 if orec.get("error") else 0),
                         timed_out=bool(orec.get("timed_out")) or "exit=124" in (orec.get("error") or ""),

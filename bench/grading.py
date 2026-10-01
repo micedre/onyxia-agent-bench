@@ -57,8 +57,8 @@ _DOWNLOAD_PATTERNS = [
 
 # Chemins de couche exclus des livrables meme si l'agent les a modifies : editer le
 # `workflow-template.yaml` d'une skill ne doit pas valider "manifeste Argo present".
-_LAYER_DIRS = (".opencode", "prompts")
-_LAYER_FILES = ("AGENTS.md", "opencode.json", LAYER_FILES_MANIFEST)
+_LAYER_DIRS = (".opencode", ".claude", "prompts")
+_LAYER_FILES = ("AGENTS.md", "CLAUDE.md", "opencode.json", LAYER_FILES_MANIFEST)
 _TEST_DIRS = ("tests", "test", "testthat")
 _TEST_FILE_RE = re.compile(r"^(test_.*|.*_test|conftest|test-.*)\.(py|R|r)$")
 

@@ -17,9 +17,10 @@ import os
 from pathlib import Path
 
 from bench import k8s
+from bench.agents import AGENTS, make_driver
 from bench.configs import load_ladder
 from bench.mlflow_logging import HAS_MLFLOW, make_logger
-from bench.opencode_driver import MockOpenCodeDriver, PodOpenCodeDriver, RealOpenCodeDriver
+from bench.opencode_driver import MockOpenCodeDriver, PodOpenCodeDriver
 from bench.registry import discover_tasks
 from bench.schema import AXES
 
@@ -144,13 +145,23 @@ def cmd_run(args):
     run_name = args.run_name or dt.datetime.now().strftime("bench-%Y%m%d-%H%M%S")
     out_dir = Path(args.out) if args.out else (REPO / "runs" / run_name)
 
+    if args.agent == "claude":
+        if args.dry_run:
+            raise SystemExit("--dry-run n'a pas de driver mock pour --agent claude")
+        if args.isolation == "pod":
+            raise SystemExit("--isolation pod n'est pas encore supporte avec --agent claude "
+                             "(l'image doit contenir `claude`) : utiliser --isolation process")
+        if not args.model:
+            raise SystemExit("--model est requis avec --agent claude (ex. claude-opus-5-5)")
+    args.model = args.model or "onyxia/qwen3-6-35b-moe"
+
     cleanup = None
     if args.dry_run:
         driver = MockOpenCodeDriver()
     elif args.isolation == "pod":
         driver, cleanup = _build_pod_driver(args, tasks, run_name)
     else:
-        driver = RealOpenCodeDriver()
+        driver = make_driver(args.agent)
 
     logger = make_logger(REPO, args.experiment, run_name,
                          enabled=not args.no_mlflow)
@@ -163,14 +174,15 @@ def cmd_run(args):
             "pod_image": args.pod_image if args.isolation == "pod" else None,
             "harness_commit": GIT_COMMIT}
 
-    print(f"driver={driver.name} model={args.model} seeds={args.seeds} "
+    print(f"agent={args.agent} driver={driver.name} model={args.model} seeds={args.seeds} "
           f"workers={args.workers} suite={meta['suite']} "
           f"tasks={[t.id for t in tasks]} configs={config_ids}")
     print(f"sortie -> {out_dir}\n")
     try:
         from bench.runner import run_benchmark
         summary = run_benchmark(tasks, configs, base, CONFIGS_DIR, args.model, args.seeds,
-                                driver, out_dir, logger, workers=args.workers, meta=meta)
+                                driver, out_dir, logger, workers=args.workers, meta=meta,
+                                agent=args.agent)
     finally:
         if cleanup:
             cleanup()
@@ -240,7 +252,12 @@ def main(argv=None):
                          "competence du modele ; `candidate` = taches en cours de pilotage, pas "
                          "encore admises dans `context` ; `all` = toutes.")
     pr.add_argument("--configs", default="C0,C4", help="ids de config, ex. C0,C4")
-    pr.add_argument("--model", default="onyxia/qwen3-6-35b-moe", help="provider/model pour opencode")
+    pr.add_argument("--agent", choices=AGENTS, default="opencode",
+                    help="agent pilote : opencode (defaut) ou claude (`claude -p`, modele "
+                         "frontier de reference ; les couches sont traduites, cf. bench/agents.py)")
+    pr.add_argument("--model", default=None,
+                    help="opencode : provider/model (defaut onyxia/qwen3-6-35b-moe) ; "
+                         "claude : identifiant de modele Claude (obligatoire)")
     pr.add_argument("--seeds", type=int, default=3)
     pr.add_argument("--workers", type=int, default=4,
                     help="cellules executees en parallele (defaut : 4). Chaque worker "

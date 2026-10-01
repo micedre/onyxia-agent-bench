@@ -415,6 +415,42 @@ sous-agents) porte son propre `"model"` dans la config globale, et il n'est pas 
 si `--model` (`-m`) le prévaut réellement ou s'il est simplement resté cohérent par coïncidence
 dans nos tests jusqu'ici.
 
+## Comparer avec un modèle frontier (`--agent claude`)
+
+`--agent claude` pilote Claude Code en headless (`claude -p … --output-format stream-json`) à la
+place d'OpenCode, avec les **mêmes tâches, graders et seeds**. Les couches de `configs/layers/`
+restent la source unique : `bench/agents.py` les **traduit** à la volée dans le workspace
+(`AGENTS.md` → `CLAUDE.md`, skills → `.claude/skills/`, agents → `.claude/agents/`, permissions →
+`.claude/settings.json` ; les commandes sont abandonnées, inertes en non interactif).
+
+```bash
+# un run par (agent, modèle) ; seules C0 et C4 comptent, C1-C3 sont facultatives
+python -m bench run --agent claude --model <id-modele-claude> --configs C0,C4 --seeds 5
+python -m bench compare runs/<run-opencode> runs/<run-claude> --out runs/compare.md
+```
+
+Prérequis : `claude` installé et authentifié (`ANTHROPIC_API_KEY`, ou identifiants OAuth, recopiés
+dans un `CLAUDE_CONFIG_DIR` temporaire pour que `~/.claude` ne fuite pas dans C0). Isolation
+`process` uniquement pour l'instant ; pas de `--dry-run`.
+
+Règles d'équité et limites, à citer avec les résultats :
+
+- **Headless = pas de `ask`.** Ce qui n'est pas explicitement autorisé est refusé, comme OpenCode
+  le fait implicitement. `bash: "*": ask` disparaît donc (plus de `Bash` nu en C4) et les `ask`
+  nommés (`git push`, `rm`…) passent en `deny`. C0 reçoit la permission large de l'opencode nu
+  (édition et shell autorisés, web refusé). Les rejets sont comptés depuis `permission_denials`.
+- **Le prompt de l'agent `build`** (base + build + contrat de fin) est ajouté à `CLAUDE.md`
+  (Claude Code n'a pas d'agent primaire configurable).
+- **Non traduit** : modèle/température/`steps` par agent (`model: inherit`) ; l'allowlist bash du
+  sous-agent `reviewer` (limité à `Read, Grep, Glob, Bash` et à son prompt).
+- **Le harnais change avec le modèle** : « nu » = Claude Code sans nos couches, pas OpenCode sans
+  nos couches (prompt système, outils, compaction diffèrent). L'apport du contexte se lit
+  *au sein* d'un agent (C4 − C0) ; l'écart entre agents est descriptif.
+- Les seeds ne sont pas transmis à l'agent (simple étiquette de cellule), comme pour OpenCode :
+  `bench compare` fait donc ses écarts entre runs par tâche, pas par (tâche, seed).
+- Les tokens comptent le cache lu à chaque tour ; comparer la colonne « hors cache lu ». L'USD
+  n'est publié que par Claude (0 pour les modèles auto-hébergés) et reste hors du score combiné.
+
 ## Prochaines étapes
 
 - **Échelle d'ablation plus fine** : rungs `C4-noperm` (garde-fous sans `bash: ask`) et
