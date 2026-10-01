@@ -154,6 +154,44 @@ d'images [InseeFrLab/images-datascience](https://github.com/InseeFrLab/images-da
 Autre image : `--pod-image <image>` (elle doit contenir `tar` et le binaire de l'agent, ou de quoi
 l'installer pour `--agent claude`).
 
+### Image dérivée avec Claude Code et les bibliothèques des tâches (GHCR)
+
+`docker/pod/` construit une image **par-dessus l'image par défaut** : même base, plus ce que les
+cellules supposent sans le dire. Pour un run Claude en pod c'est la configuration recommandée : plus
+d'installation de ~240 Mo par cellule (~1 min 45 s mesurées), et les agents ne perdent ni temps ni
+tokens à installer des bibliothèques (durées de cellule comparables entre elles).
+
+| Ajout | Détail |
+|---|---|
+| `claude` | binaire natif, version épinglée (`ARG CLAUDE_VERSION`), **sha256 vérifié** contre le manifeste de la release, dans `/usr/local/bin` ; `DISABLE_AUTOUPDATER=1` |
+| Python | `scikit-learn`, `mlflow`, `geopandas`/`pyproj`, `matplotlib`, `polars`, `pandera`, `nbclient`/`ipykernel`/`nbformat` (rendu Quarto), `pytest`, `ruff`… (`docker/pod/requirements.txt`) par-dessus `duckdb numpy pandas pyarrow s3fs requests` de la base |
+| R | `testthat`, `targets`, `styler` (`renv`, `devtools`, `lintr` sont déjà dans la base) |
+| `/opt/bench-image-manifest.txt` | versions des outils + `pip freeze` + paquets R : rattache chaque résultat à l'environnement exact (`docker run --rm <image> cat /opt/bench-image-manifest.txt`) |
+
+Construction et publication : `.github/workflows/pod-image.yml` (push sur `main` touchant
+`docker/pod/**`, ou lancement manuel avec `claude_version`/`base_image`). Il construit, **teste
+l'image sans jeton ni dépense** (versions, imports Python, paquets R), puis pousse sur
+`ghcr.io/micedre/onyxia-agent-bench-pod` avec le jeton `GITHUB_TOKEN` (aucun secret à créer). Tags :
+`<tag de la base>-claude<version>` (ex. `r4.6.1-py3.13.15-2026.09.07-claude2.1.286`), `sha-<commit>`
+et `latest`. Utiliser un tag explicite plutôt que `latest` dans un run dont on cite les chiffres.
+
+**Une fois, après le premier push** : GitHub → Packages → `onyxia-agent-bench-pod` → *Package
+settings* → *Change visibility* → **Public**. Un paquet GHCR est privé à sa création, et les Jobs
+du benchmark n'ont pas d'`imagePullSecrets` : un paquet privé donne un `ImagePullBackOff`, que le
+harnais range en `never_ran`.
+
+```bash
+python -m bench run --agent claude --model claude-opus-5-5 --isolation pod \
+  --pod-image ghcr.io/micedre/onyxia-agent-bench-pod:r4.6.1-py3.13.15-2026.09.07-claude2.1.286 \
+  --suite context --configs C0,C4 --seeds 5
+# construction locale (Docker requis) :
+docker build -f docker/pod/Dockerfile -t onyxia-agent-bench-pod docker/pod
+```
+
+Le Dockerfile et le harnais partagent leurs défauts (image de base = `DEFAULT_POD_IMAGE`, version de
+`claude` = `DEFAULT_POD_CLAUDE_VERSION`) ; `tests/test_pod_image_files.py` échoue s'ils divergent.
+Avec une autre image, l'installation de `claude` au démarrage du pod reste le repli.
+
 Comment ça marche (voir `bench/k8s.py` + `PodOpenCodeDriver` dans `bench/opencode_driver.py`) :
 namespace auto-détecté depuis le pod courant (ou `--pod-namespace`) ; un **Secret k8s créé une
 fois par run** (`bench-creds-<run>`, `OPENCODE_ONYXIA_BASE_URL`/`_API_KEY` uniquement — voir

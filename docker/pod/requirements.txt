@@ -1,0 +1,28 @@
+# Paquets Python ajoutes a l'image de base (r-python-julia n'a que duckdb, numpy, pandas, pyarrow,
+# requests, s3fs). Ce que les taches du benchmark supposent disponible : sans eux l'agent perd du
+# temps et des tokens a les installer, et la duree d'une cellule dependrait du reseau.
+# Bornes basses seulement : `uv pip install --system` n'ecrase pas les versions deja installees qui
+# les satisfont. La reproductibilite vient du tag date de l'image de base ET du manifeste ecrit dans
+# l'image (/opt/bench-image-manifest.txt, pip freeze complet).
+
+# modelisation et suivi d'experiences (t03, t28)
+scikit-learn>=1.4
+mlflow>=2.10
+polars>=1.0
+pandera>=0.20
+
+# geo (t13, t21)
+geopandas>=1.0
+pyproj>=3.6
+
+# figures et rapports Quarto avec cellules Python (t07, t28)
+matplotlib>=3.8
+nbclient>=0.10
+nbformat>=5.10
+ipykernel>=6.29
+tabulate>=0.9
+
+# qualite et tests du code produit (t04, t18)
+pytest>=8.0
+ruff>=0.6
+pyyaml>=6.0
