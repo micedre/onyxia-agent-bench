@@ -222,11 +222,12 @@ def main(argv=None):
     pr = sub.add_parser("run", help="lancer le benchmark")
     pr.add_argument("--tasks", default=None,
                     help="ids separes par des virgules, ou 'all'. Prime sur --suite.")
-    pr.add_argument("--suite", default="context", choices=["context", "model", "all"],
+    pr.add_argument("--suite", default="context", choices=["context", "model", "candidate", "all"],
                     help="jeu de taches (defaut : context). `context` = les taches dont "
                          "l'enonce tait la convention que les couches fournissent, donc celles "
                          "qui mesurent l'apport du contexte ; `model` = celles qui mesurent la "
-                         "competence du modele ; `all` = les deux.")
+                         "competence du modele ; `candidate` = taches en cours de pilotage, pas "
+                         "encore admises dans `context` ; `all` = toutes.")
     pr.add_argument("--configs", default="C0,C4", help="ids de config, ex. C0,C4")
     pr.add_argument("--model", default="onyxia/qwen3-6-35b-moe", help="provider/model pour opencode")
     pr.add_argument("--seeds", type=int, default=3)
@@ -265,7 +266,7 @@ def main(argv=None):
     pr.set_defaults(func=cmd_run)
 
     pl = sub.add_parser("list", help="lister tasks et configs")
-    pl.add_argument("--suite", default="all", choices=["context", "model", "all"])
+    pl.add_argument("--suite", default="all", choices=["context", "model", "candidate", "all"])
     pl.set_defaults(func=cmd_list)
 
     pg = sub.add_parser("regrade", help="re-noter un run existant (graders/parseur a jour) "

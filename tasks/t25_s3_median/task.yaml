@@ -1,0 +1,19 @@
+id: t25_s3_median
+tags: [s3, platform-correctness, python]
+# CANDIDATE (suite `candidate`) : pas encore admise dans `context`. Variante de t01 sans l'indice
+# `CENSUS_URI`/`OUTPUT_URI` : l'enonce donne la source (S3) et un extrait local pour essayer,
+# mais ne dit ni comment lire S3 (en memoire, sans telechargement), ni d'ou viennent les
+# identifiants, ni qu'il faut parametrer les chemins. A piloter C0/C4 avant admission ;
+# l'ecarter si C0 fait deja aussi bien (cf. critere "l'enonce retient ce que le contexte fournit").
+suite: candidate
+timeout_s: 900
+# Budgets de l'axe efficiency : valeurs provisoires, a recalibrer sur la mediane de C0 au pilote.
+budget_tokens: 500000
+budget_s: 300
+prompt: |
+  Le recensement 2021 (colonnes : code_commune, commune, departement, population,
+  revenu_disponible) est en Parquet partitionne par departement dans mon bucket projet, sous
+  s3://mon-bucket/data/census/. Un extrait local des memes partitions est dans data/census/
+  pour essayer.
+  Donne-moi le revenu disponible median par departement dans `mediane_departement.csv`.
+  Je veux pouvoir relancer ton script moi-meme plus tard, directement sur le bucket.

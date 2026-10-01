@@ -14,6 +14,10 @@ REPO = Path(__file__).resolve().parent.parent
 TASKS = discover_tasks(REPO / "tasks")
 CONTEXT = {"t03_mlflow_train", "t09_secret_trap", "t10_diag_403",
            "t18_notebook_refactor", "t23_code_review"}
+# Taches en cours de pilotage : ni `context` ni `model` tant qu'elles n'ont pas ete mesurees
+# C0/C4 (une tache n'entre dans `context` que si le contexte y change le score).
+CANDIDATE = {"t25_s3_median", "t26_r_median_commit", "t27_microdata_trap",
+             "t28_eda_model_report"}
 
 
 def _ids(sel):
@@ -24,11 +28,13 @@ def test_context_suite_is_exactly_the_five():
     assert _ids(select_tasks(TASKS, None, "context")) == CONTEXT
 
 
-def test_model_suite_is_the_rest_and_they_partition():
+def test_suites_partition_the_tasks():
     model = _ids(select_tasks(TASKS, None, "model"))
-    assert model == set(TASKS) - CONTEXT
-    assert model & CONTEXT == set()
-    assert model | CONTEXT == set(TASKS)
+    cand = _ids(select_tasks(TASKS, None, "candidate"))
+    assert cand == CANDIDATE
+    assert model == set(TASKS) - CONTEXT - CANDIDATE
+    assert not (model & CONTEXT) and not (model & cand) and not (cand & CONTEXT)
+    assert model | CONTEXT | cand == set(TASKS)
 
 
 def test_all_returns_every_task():
@@ -48,7 +54,7 @@ def test_unknown_suite_is_refused_not_silently_empty():
 
 
 def test_every_task_declares_a_known_suite():
-    assert {t.suite for t in TASKS.values()} <= {"context", "model"}
+    assert {t.suite for t in TASKS.values()} <= {"context", "model", "candidate"}
 
 
 def test_counter_case_is_present_in_the_default_suite():

@@ -1,0 +1,15 @@
+id: t28_eda_model_report
+tags: [eda, mlflow, quarto, reproducibility, end-to-end]
+# CANDIDATE (suite `candidate`). Chaine complete d'un data scientist : explorer, nettoyer,
+# modeliser, rendre compte. L'enonce ne dit ni MLflow, ni Quarto, ni uv : ce sont les conventions
+# que le contexte fournit. Plus long que les autres (timeout eleve). A piloter avant admission.
+suite: candidate
+timeout_s: 2400
+# Budgets de l'axe efficiency : valeurs provisoires, a recalibrer sur la mediane de C0 au pilote.
+budget_tokens: 900000
+budget_s: 600
+prompt: |
+  `donnees_communes.csv` contient des communes avec leur departement, leur population, leur
+  taux de chomage et leur revenu disponible. Explore ces donnees, nettoie ce qui doit l'etre,
+  entraine un modele simple qui explique le revenu disponible, et redige-moi un rapport de
+  l'analyse. Je dois pouvoir tout rejouer plus tard.
