@@ -214,6 +214,17 @@ def cmd_regrade(args):
     _print_summary(summary, out_dir or (run_dir / "regrade"))
 
 
+def cmd_compare(args):
+    from bench.compare import load_run, render
+    runs = [load_run(Path(d)) for d in args.run_dirs]
+    md = render(runs, low=args.low, high=args.high)
+    if args.out:
+        Path(args.out).write_text(md, encoding="utf-8")
+        print(f"comparaison -> {args.out}")
+    else:
+        print(md)
+
+
 def main(argv=None):
     _load_dotenv(REPO / ".env")
     p = argparse.ArgumentParser(prog="bench", description="Benchmark opencode-onyxia")
@@ -274,6 +285,13 @@ def main(argv=None):
     pg.add_argument("run_dir", help="ex. runs/bench-20260902-044546")
     pg.add_argument("--out", default=None, help="dossier de sortie (defaut : <run_dir>/regrade)")
     pg.set_defaults(func=cmd_regrade)
+
+    pc = sub.add_parser("compare", help="comparer des runs (agent x modele) cote a cote")
+    pc.add_argument("run_dirs", nargs="+", help="dossiers de run ; le premier sert de reference")
+    pc.add_argument("--low", default="C0", help="config basse (defaut C0, agent nu)")
+    pc.add_argument("--high", default="C4", help="config haute (defaut C4, config complete)")
+    pc.add_argument("--out", default=None, help="fichier Markdown de sortie (defaut : stdout)")
+    pc.set_defaults(func=cmd_compare)
 
     args = p.parse_args(argv)
     args.func(args)
