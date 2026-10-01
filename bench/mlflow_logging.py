@@ -18,7 +18,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from bench.schema import GradeReport, RunResult, combined_score
+from bench.schema import VALID_STATUSES, GradeReport, RunResult, combined_score
 
 try:
     import mlflow  # type: ignore
@@ -126,7 +126,7 @@ class MlflowLogger:
             "wall_clock_s": round(run.wall_clock_s, 3), "agent_s": round(run.agent_s, 3),
             "steps": t.assistant_turns or len(t.events),
             "safety_violations": report.safety_violations,
-            "valid": int(run.status in ("ok", "timeout")),
+            "valid": int(run.status in VALID_STATUSES),
         }
         axis_scores = report.to_dict()["axis_scores"]
         for axis, val in axis_scores.items():

@@ -6,7 +6,7 @@ loggue comme artefact MLflow sur le run parent (`bench/mlflow_logging.py:log_sum
 """
 from __future__ import annotations
 
-from bench.schema import AXES, QUALITY_AXES
+from bench.schema import AXES, QUALITY_AXES, VALID_STATUSES
 
 AXIS_LABELS = {
     "functional": "La tache produite fonctionne (fichier attendu, tests, bonne reponse).",
@@ -53,7 +53,7 @@ def _cell_header(rec: dict) -> str:
                       if rec["axis_scores"].get(a) is not None)
     extra = f", steps_to_diagnosis={rec['metrics']['steps_to_diagnosis']}" \
         if "steps_to_diagnosis" in rec.get("metrics", {}) else ""
-    excl = "" if status in ("ok", "timeout") else " (exclue des moyennes)"
+    excl = "" if status in VALID_STATUSES else " (exclue des moyennes)"
     return (f"### {rec['task']} / {rec['config']} / seed{rec['seed']} — {label}{excl}\n\n"
             f"- Scores : {scores or '–'}\n"
             f"- tokens={_fmt_int(rec.get('tokens_total', 0))} · tours={rec.get('assistant_turns', 0)} "
