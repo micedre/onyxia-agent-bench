@@ -134,9 +134,25 @@ rien d'autre que le workspace poussé n'y existe.
 
 ```bash
 python -m bench run --isolation pod \
-  --pod-image inseefrlab/onyxia-vscode-r-python-julia:<tag> \
   --model onyxia/qwen3-6-35b-moe --seeds 3 --configs C0,C4
 ```
+
+**Image par défaut** (`--pod-image`, `bench.k8s.DEFAULT_POD_IMAGE`) :
+`inseefrlab/onyxia-vscode-r-python-julia:r4.6.1-py3.13.15-2026.09.07`. Choisie d'après la chaîne
+d'images [InseeFrLab/images-datascience](https://github.com/InseeFrLab/images-datascience)
+(`base` → `r-minimal` → `r-python-julia` → variante `vscode`) :
+
+- **R + Python** (+ `uv`, `quarto`, `duckdb`, `git`, `curl`, `tar`, `kubectl`) : `t05` et `t26`
+  demandent du R, une image Python seule handicaperait l'agent sur ces tâches ;
+- **variante `vscode`** : c'est elle qui embarque `opencode` (version cuite dans l'image) ;
+- **tag daté**, pas le flottant `r4.6.1-py3.13.15` : fige R, Python et la version d'`opencode`, donc
+  des runs comparables dans le temps ;
+- **Python 3.13**, celui de l'environnement de dev (la 3.14 est toute récente) ;
+- amd64 uniquement, ~2,8 Gio (premier tirage par nœud plus lent). Aucune image Onyxia n'embarque
+  `node`/`npm`.
+
+Autre image : `--pod-image <image>` (elle doit contenir `tar` et le binaire de l'agent, ou de quoi
+l'installer pour `--agent claude`).
 
 Comment ça marche (voir `bench/k8s.py` + `PodOpenCodeDriver` dans `bench/opencode_driver.py`) :
 namespace auto-détecté depuis le pod courant (ou `--pod-namespace`) ; un **Secret k8s créé une
@@ -162,7 +178,8 @@ que `--pod-orphan-max-age-s` (pas un ménage global, pour ne pas couper un run c
 même namespace).
 
 **Identifiants** : seuls `OPENCODE_ONYXIA_BASE_URL`/`_API_KEY` (le nécessaire pour qu'`opencode`
-appelle le modèle) sont poussés dans le pod. `MLFLOW_TRACKING_URI`/`_USERNAME`/`_PASSWORD` ne le
+appelle le modèle) sont poussés dans le pod ; avec `--agent claude`, c'est `CLAUDE_CODE_OAUTH_TOKEN`
+à la place (et `ANTHROPIC_API_KEY` s'il est défini), jamais les deux familles ensemble. `MLFLOW_TRACKING_URI`/`_USERNAME`/`_PASSWORD` ne le
 sont **pas** — le logging MLflow est fait par le processus du harnais lui-même, après
 rapatriement des résultats, jamais depuis la cellule. Les credentials S3/Vault réels ne sont pas
 non plus transmis par défaut : la notation étant entièrement offline (voir plus haut), la
@@ -429,9 +446,38 @@ python -m bench run --agent claude --model <id-modele-claude> --configs C0,C4 --
 python -m bench compare runs/<run-opencode> runs/<run-claude> --out runs/compare.md
 ```
 
-Prérequis : `claude` installé et authentifié (`ANTHROPIC_API_KEY`, ou identifiants OAuth, recopiés
-dans un `CLAUDE_CONFIG_DIR` temporaire pour que `~/.claude` ne fuite pas dans C0). Isolation
-`process` uniquement pour l'instant ; pas de `--dry-run`.
+Prérequis : `claude` installé et authentifié (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, ou
+identifiants OAuth, recopiés dans un `CLAUDE_CONFIG_DIR` temporaire pour que `~/.claude` ne fuite
+pas dans C0). Pas de `--dry-run`.
+
+**En pod** (`--isolation pod`, isolation stricte, recommandé pour le bras frontier) :
+
+```bash
+claude setup-token                       # une fois ; copier le jeton affiché
+export CLAUDE_CODE_OAUTH_TOKEN=...       # ou le mettre dans .env
+python -m bench run --agent claude --model claude-opus-5-5 --isolation pod \
+  --suite context --configs C0,C4 --seeds 5          # image par défaut, cf. ci-dessous
+```
+
+Le jeton est poussé dans le Secret k8s du run (`envFrom`, jamais en ligne de commande). `claude` est
+**installé au démarrage du pod** s'il manque, avec l'installeur officiel épinglé :
+`curl -fsSL https://claude.ai/install.sh | bash -s <version>` (dans `$HOME/.local/bin`, sans root,
+sans `node` : les images Onyxia n'en ont pas, et le paquet npm exige Node ≥ 22). La version est
+épinglée par `--pod-claude-version` (`X.Y.Z`, `stable` ou `latest` ; défaut : celle testée, et
+`latest` fait dériver les runs entre eux), `DISABLE_AUTOUPDATER=1` l'empêche de se mettre à jour en
+cours de run, et `--pod-claude-install-cmd` remplace la commande (miroir interne, etc.). Il faut
+dans l'image `tar`, `curl` et `bash` (présents dans l'image par défaut), et un accès sortant vers
+`claude.ai`, `downloads.claude.ai` et `api.anthropic.com`. Une installation en échec donne une
+cellule `never_ran` (exclue des moyennes), pas un zéro attribué à l'agent ; la durée d'installation
+compte dans `wall_clock_s`, pas dans `agent_s`.
+
+**Coût de l'installation** : le binaire fait ~240 Mo et l'installation a pris ~1 min 45 s sur un
+pod du cluster (mesuré), **à chaque cellule** — pour 100 cellules, ~24 Go téléchargés et ~3 h de
+pod en plus. Pour un gros run, construire une image dérivée de l'image par défaut qui embarque
+`claude` (l'installation est alors sautée dès que `claude` est dans le `PATH`).
+**Exposition résiduelle** : le jeton est dans l'environnement du conteneur, donc lisible par un
+agent qui a un shell (même nature d'exposition que la clé d'API d'OpenCode, mais c'est ici un
+identifiant d'abonnement) : utiliser un jeton dédié et révocable.
 
 Règles d'équité et limites, à citer avec les résultats :
 

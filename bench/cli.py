@@ -18,6 +18,7 @@ from pathlib import Path
 
 from bench import k8s
 from bench.agents import AGENTS, make_driver
+from bench.claude_driver import DEFAULT_POD_CLAUDE_VERSION
 from bench.configs import load_ladder
 from bench.mlflow_logging import HAS_MLFLOW, make_logger
 from bench.opencode_driver import MockOpenCodeDriver, PodOpenCodeDriver
@@ -97,20 +98,34 @@ def cmd_list(args):
         print(f"  - {c.id:3s} layers={c.layers}")
 
 
-def _build_pod_driver(args, tasks, run_id: str):
-    """Renvoie (driver, cleanup) : `cleanup()` supprime le Secret cree pour ce run."""
-    if not args.pod_image:
-        raise SystemExit("--pod-image est requis avec --isolation pod "
-                         "(ex. inseefrlab/onyxia-vscode-r-python-julia:<tag>)")
-    namespace = _detect_namespace(args.pod_namespace)
-    if not namespace:
-        raise SystemExit("namespace k8s introuvable (auto-detection echouee) : "
-                         "passe --pod-namespace explicitement")
+def _pod_secret_data(agent: str) -> dict[str, str]:
+    """Variables d'environnement poussees dans le pod via le Secret du run : le strict
+    necessaire pour que l'agent appelle son modele, rien d'autre (cf. README, "Identifiants")."""
+    if agent == "claude":
+        token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+        if not token:
+            raise SystemExit("CLAUDE_CODE_OAUTH_TOKEN manquant : requis pour --agent claude "
+                             "avec --isolation pod (le generer avec `claude setup-token`, puis "
+                             "l'exporter ou le mettre dans .env)")
+        data = {"CLAUDE_CODE_OAUTH_TOKEN": token}
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            data["ANTHROPIC_API_KEY"] = os.environ["ANTHROPIC_API_KEY"]
+        return data
     base_url = os.environ.get("OPENCODE_ONYXIA_BASE_URL")
     api_key = os.environ.get("OPENCODE_ONYXIA_API_KEY")
     if not base_url or not api_key:
         raise SystemExit("OPENCODE_ONYXIA_BASE_URL/OPENCODE_ONYXIA_API_KEY manquants "
                          "(.env) : requis pour creer le Secret k8s des cellules")
+    return {"OPENCODE_ONYXIA_BASE_URL": base_url, "OPENCODE_ONYXIA_API_KEY": api_key}
+
+
+def _build_pod_driver(args, tasks, run_id: str):
+    """Renvoie (driver, cleanup) : `cleanup()` supprime le Secret cree pour ce run."""
+    namespace = _detect_namespace(args.pod_namespace)
+    if not namespace:
+        raise SystemExit("namespace k8s introuvable (auto-detection echouee) : "
+                         "passe --pod-namespace explicitement")
+    secret_data = _pod_secret_data(args.agent)
 
     max_age = args.pod_orphan_max_age_s or (2 * max((t.timeout_s for t in tasks), default=900))
     print(f"[pod] menage des jobs/secrets abandonnes (namespace={namespace}, "
@@ -119,18 +134,22 @@ def _build_pod_driver(args, tasks, run_id: str):
 
     secret_name = f"bench-creds-{k8s.sanitize_label(run_id)}"
     secret_manifest = k8s.build_secret_manifest(
-        name=secret_name, namespace=namespace, run_id=run_id,
-        base_url=base_url, api_key=api_key)
+        name=secret_name, namespace=namespace, run_id=run_id, string_data=secret_data)
     k8s.kubectl_apply(secret_manifest)
 
     resources = {
         "requests": {"cpu": args.pod_cpu_request, "memory": args.pod_mem_request},
         "limits": {"cpu": args.pod_cpu_limit, "memory": args.pod_mem_limit},
     }
-    driver = PodOpenCodeDriver(image=args.pod_image, namespace=namespace,
-                               secret_name=secret_name, run_id=run_id, resources=resources,
-                               ready_timeout_s=args.pod_ready_timeout_s,
-                               ready_retries=args.pod_ready_retries)
+    kwargs = dict(image=args.pod_image, namespace=namespace, secret_name=secret_name,
+                  run_id=run_id, resources=resources, ready_timeout_s=args.pod_ready_timeout_s,
+                  ready_retries=args.pod_ready_retries)
+    if args.agent == "claude":
+        from bench.claude_driver import PodClaudeDriver
+        driver = PodClaudeDriver(**kwargs, claude_version=args.pod_claude_version,
+                                 install_cmd=args.pod_claude_install_cmd)
+    else:
+        driver = PodOpenCodeDriver(**kwargs)
     return driver, lambda: k8s.delete("secret", secret_name, namespace)
 
 
@@ -148,9 +167,6 @@ def cmd_run(args):
     if args.agent == "claude":
         if args.dry_run:
             raise SystemExit("--dry-run n'a pas de driver mock pour --agent claude")
-        if args.isolation == "pod":
-            raise SystemExit("--isolation pod n'est pas encore supporte avec --agent claude "
-                             "(l'image doit contenir `claude`) : utiliser --isolation process")
         if not args.model:
             raise SystemExit("--model est requis avec --agent claude (ex. claude-opus-5-5)")
     args.model = args.model or "onyxia/qwen3-6-35b-moe"
@@ -172,6 +188,8 @@ def cmd_run(args):
     meta = {"suite": "explicite (--tasks)" if args.tasks else args.suite,
             "isolation": "mock" if args.dry_run else args.isolation, "workers": args.workers,
             "pod_image": args.pod_image if args.isolation == "pod" else None,
+            "claude_version": (args.pod_claude_version if args.agent == "claude"
+                               and args.isolation == "pod" else None),
             "harness_commit": GIT_COMMIT}
 
     print(f"agent={args.agent} driver={driver.name} model={args.model} seeds={args.seeds} "
@@ -270,9 +288,11 @@ def main(argv=None):
     pr.add_argument("--isolation", choices=["process", "pod"], default="process",
                     help="process = sous-processus local (defaut) ; "
                          "pod = Job Kubernetes ephemere par cellule (isolation stricte)")
-    pr.add_argument("--pod-image", default=None,
-                    help="image conteneur pour --isolation pod, ex. "
-                         "inseefrlab/onyxia-vscode-r-python-julia:<tag>")
+    pr.add_argument("--pod-image", default=k8s.DEFAULT_POD_IMAGE,
+                    help="image conteneur pour --isolation pod (defaut : %(default)s = R + "
+                         "Python + uv + quarto + opencode, tag date). Doit contenir `tar` ; "
+                         "`opencode` pour --agent opencode ; `curl` et `bash` pour --agent "
+                         "claude (installe au demarrage du pod s'il manque)")
     pr.add_argument("--pod-namespace", default=None,
                     help="namespace k8s (defaut : auto-detecte depuis le pod courant)")
     pr.add_argument("--pod-cpu-request", default="500m")
@@ -284,6 +304,16 @@ def main(argv=None):
     pr.add_argument("--pod-ready-retries", type=int, default=1,
                     help="nouvelles tentatives de creation du Job si le pod n'est jamais pret "
                          "(defaut 1 ; le diagnostic k8s est ecrit dans <cellule>/k8s_failure.txt)")
+    pr.add_argument("--pod-claude-version", default=DEFAULT_POD_CLAUDE_VERSION,
+                    help="--agent claude --isolation pod : version de Claude Code installee au "
+                         "demarrage du pod si absente (installeur officiel claude.ai) : X.Y.Z, "
+                         f"`stable` ou `latest` (defaut {DEFAULT_POD_CLAUDE_VERSION}, la version "
+                         "testee ; `latest` fait deriver les runs entre eux)")
+    pr.add_argument("--pod-claude-install-cmd", default=None,
+                    help="commande shell d'installation de claude dans le pod, a la place de "
+                         "`curl -fsSL https://claude.ai/install.sh | bash -s <version>` (miroir "
+                         "interne...) ; le binaire doit se retrouver dans $HOME/.local/bin ou "
+                         "dans le PATH")
     pr.add_argument("--pod-orphan-max-age-s", type=float, default=None,
                     help="age (s) au-dela duquel un job/secret d'un AUTRE run est balaye au "
                          "demarrage (defaut : 2x le plus grand timeout de tache selectionnee)")

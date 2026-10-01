@@ -286,6 +286,9 @@ class PodOpenCodeDriver(BaseDriver):
     driver.run().
     """
     name = "pod"
+    # Points de variation par agent (cf. PodClaudeDriver) : binaire a verifier dans le pod,
+    # preparation du pod avant le push, commande exec, parseur de la sortie.
+    agent_binary = "opencode"
 
     def __init__(self, image: str, namespace: str, secret_name: str, run_id: str,
                 resources: dict, pod_workdir: str = "/tmp/bench-cell",
@@ -357,22 +360,17 @@ class PodOpenCodeDriver(BaseDriver):
                 k8s.delete("job", job_name, self.namespace, wait=True, timeout=90)
         return fail(last_err or "pod jamais pret", exit_code=1)
 
-    def _exec_cell(self, task, workspace, model, seed, config_id, pod: str,
-                   t0: float) -> RunResult:
-        def fail(error: str, exit_code: int = 1) -> RunResult:
-            return RunResult(task.id, config_id, model, seed, workspace, Transcript(text=""),
-                             exit_code=exit_code, wall_clock_s=time.time() - t0, error=error)
+    def prepare_pod(self, pod: str, workspace: Path) -> str | None:
+        """Prepare le pod avant le push (installer l'agent...). Renvoie un message d'erreur, ou
+        None si tout va bien. Par defaut : verifier que le binaire de l'agent est dans l'image.
+        Hors de `agent_s` : cette duree reste dans `wall_clock_s` seulement."""
+        if not k8s.check_binary(pod, self.namespace, self.agent_binary):
+            return (f"'{self.agent_binary}' absent de l'image '{self.image}' "
+                    "(image mal choisie pour --isolation pod ?)")
+        return None
 
-        for binary in ("tar", "opencode"):
-            if not k8s.check_binary(pod, self.namespace, binary):
-                return fail(f"'{binary}' absent de l'image '{self.image}' "
-                            "(image mal choisie pour --isolation pod ?)", exit_code=127)
-
-        try:
-            k8s.push_workspace(workspace, pod, self.namespace, self.pod_workdir, timeout=60)
-        except (RuntimeError, subprocess.TimeoutExpired) as e:
-            return fail(f"push du workspace echoue : {e}")
-
+    def exec_command(self, task, model) -> str:
+        """Commande shell executee dans le pod par `kubectl exec ... sh -c`."""
         # --agent build : sans lui, opencode retombe sur `default_agent` (souvent "plan"
         # dans la config globale onyxia, qui REFUSE toute edition - cf. README).
         # XDG_CONFIG_HOME/XDG_DATA_HOME isoles : l'image bake ~/.config/opencode (la vraie
@@ -385,11 +383,34 @@ class PodOpenCodeDriver(BaseDriver):
         # CI=1 : meme signal de non-interactivite que le driver process.
         xdg_cfg = shlex.quote("/tmp/bench-xdg-config")
         xdg_data = shlex.quote("/tmp/bench-xdg-data")
-        cmd = (f"cd {shlex.quote(self.pod_workdir)} && "
-               f"OPENCODE_CONFIG={shlex.quote(self.pod_workdir + '/opencode.json')} "
-               f"XDG_CONFIG_HOME={xdg_cfg} XDG_DATA_HOME={xdg_data} CI=1 "
-               f"timeout {task.timeout_s}s opencode run --agent build "
-               f"-m {shlex.quote(model)} --format json {shlex.quote(task.prompt)}")
+        return (f"cd {shlex.quote(self.pod_workdir)} && "
+                f"OPENCODE_CONFIG={shlex.quote(self.pod_workdir + '/opencode.json')} "
+                f"XDG_CONFIG_HOME={xdg_cfg} XDG_DATA_HOME={xdg_data} CI=1 "
+                f"timeout {task.timeout_s}s opencode run --agent build "
+                f"-m {shlex.quote(model)} --format json {shlex.quote(task.prompt)}")
+
+    def parse(self, out: str) -> Transcript:
+        return parse_output(out)
+
+    def _exec_cell(self, task, workspace, model, seed, config_id, pod: str,
+                   t0: float) -> RunResult:
+        def fail(error: str, exit_code: int = 1) -> RunResult:
+            return RunResult(task.id, config_id, model, seed, workspace, Transcript(text=""),
+                             exit_code=exit_code, wall_clock_s=time.time() - t0, error=error)
+
+        if not k8s.check_binary(pod, self.namespace, "tar"):
+            return fail(f"'tar' absent de l'image '{self.image}' "
+                        "(image mal choisie pour --isolation pod ?)", exit_code=127)
+        prep_err = self.prepare_pod(pod, workspace)
+        if prep_err:
+            return fail(prep_err, exit_code=127)
+
+        try:
+            k8s.push_workspace(workspace, pod, self.namespace, self.pod_workdir, timeout=60)
+        except (RuntimeError, subprocess.TimeoutExpired) as e:
+            return fail(f"push du workspace echoue : {e}")
+
+        cmd = self.exec_command(task, model)
         timed_out = False
         rc = 0
         out, err = "", ""
@@ -420,7 +441,7 @@ class PodOpenCodeDriver(BaseDriver):
             # (fichiers non recuperes) qu'une cellule totalement perdue.
             err += f"\n[PULL WORKSPACE ECHOUE] {e}"
 
-        transcript = parse_output(out)
+        transcript = self.parse(out)
         if err:
             transcript.raw_stdout += "\n[STDERR]\n" + err
         res = RunResult(task.id, config_id, model, seed, workspace, transcript,

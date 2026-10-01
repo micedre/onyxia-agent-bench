@@ -18,6 +18,18 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+# Image par defaut des cellules (`--isolation pod`, `--pod-image`). Choix, verifie sur la chaine
+# d'images InseeFrLab/images-datascience :
+#   * `r-python-julia` : R + Python (+ uv, quarto, duckdb, git, curl, tar, kubectl...) ; t05/t26
+#     demandent du R, une image Python seule handicaperait l'agent sur ces taches ;
+#   * variante `vscode` : c'est elle qui embarque `opencode` (install-opencode.sh), requis pour
+#     le bras OpenCode ; aucune image Onyxia n'embarque node/npm ;
+#   * tag DATE, pas le flottant `r4.6.1-py3.13.15` : fige R, Python et la version d'opencode
+#     cuite dans l'image, donc des runs comparables dans le temps ;
+#   * Python 3.13 (celui de l'environnement de dev) plutot que 3.14 tout juste sorti.
+# amd64 uniquement, ~2,8 Gio.
+DEFAULT_POD_IMAGE = "inseefrlab/onyxia-vscode-r-python-julia:r4.6.1-py3.13.15-2026.09.07"
+
 LABEL_APP = "app"
 APP_VALUE = "onyxia-agent-bench"
 LABEL_RUN_ID = "bench/run-id"
@@ -103,7 +115,10 @@ def build_job_manifest(*, name: str, namespace: str, image: str, secret_name: st
 
 
 def build_secret_manifest(*, name: str, namespace: str, run_id: str,
-                          base_url: str, api_key: str) -> dict:
+                          string_data: dict[str, str]) -> dict:
+    """Secret Opaque `string_data` (cle -> valeur), reference par chaque Job via `envFrom` :
+    chaque cle devient une variable d'environnement du conteneur, donc de tout `kubectl exec`.
+    Specifique a l'agent : OPENCODE_ONYXIA_* pour opencode, CLAUDE_CODE_OAUTH_TOKEN pour claude."""
     return {
         "apiVersion": "v1",
         "kind": "Secret",
@@ -112,10 +127,7 @@ def build_secret_manifest(*, name: str, namespace: str, run_id: str,
             "labels": {LABEL_APP: APP_VALUE, LABEL_RUN_ID: sanitize_label(run_id)},
         },
         "type": "Opaque",
-        "stringData": {
-            "OPENCODE_ONYXIA_BASE_URL": base_url,
-            "OPENCODE_ONYXIA_API_KEY": api_key,
-        },
+        "stringData": dict(string_data),
     }
 
 

@@ -2,9 +2,9 @@
 
 ClaudeCodeDriver : meme contrat que RealOpenCodeDriver (BaseDriver.run -> RunResult), pour
 comparer un modele frontier au modele auto-heberge sur les memes taches, graders et seeds, en
-isolation "legere" (sous-repertoire + git sur l'hote).
-Isolation "legere" uniquement : `--isolation pod` n'est pas encore supporte pour cet agent (l'image
-doit contenir le binaire `claude`).
+isolation "legere" (sous-repertoire + git sur l'hote). PodClaudeDriver (en bas) : meme chose dans un
+Job k8s ephemere (`--isolation pod`), le binaire `claude` etant installe au demarrage du pod s'il
+manque de l'image.
 
 Format `--output-format stream-json --verbose` : nd-JSON, un objet par ligne.
   {"type":"system","subtype":"init", ...}
@@ -27,14 +27,28 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 
-from bench.opencode_driver import BaseDriver, _as_int
+from bench.opencode_driver import BaseDriver, PodOpenCodeDriver, _as_int
 from bench.schema import Event, RunResult, Transcript
+
+# Version de Claude Code testee avec ce harnais (format stream-json, flags). Epinglee par defaut
+# en mode pod : l'installation a chaque cellule ferait sinon deriver la version entre deux runs.
+DEFAULT_POD_CLAUDE_VERSION = "2.1.286"
+POD_CLAUDE_INSTALLER = "https://claude.ai/install.sh"
+# L'installeur officiel depose le binaire dans $HOME/.local/bin (sans root). Les images Onyxia
+# n'embarquent ni node ni npm : le paquet npm (Node >= 22, postinstall `node install.cjs`) n'y
+# est pas installable, l'installeur natif n'a besoin que de curl et bash. Il telecharge ~240 Mo
+# (mesure : ~1 min 45 s sur un pod du cluster) : prevoir une image qui embarque `claude` pour
+# les gros runs (l'installation est alors sautee).
+POD_CLAUDE_BIN_DIR = "$HOME/.local/bin"
+POD_CLAUDE_CONFIG_DIR = "/tmp/bench-claude-config"
+POD_INSTALL_TIMEOUT_S = 300
 
 _OUTPUT_KEEP = 4000  # caracteres de sortie d'outil conserves par evenement
 
@@ -212,3 +226,64 @@ class ClaudeCodeDriver(BaseDriver):
         res.agent_s = dt
         return res
 
+
+# --------------------------------------------------------------------------------------
+class PodClaudeDriver(PodOpenCodeDriver):
+    """`claude -p` dans un Job/pod k8s ephemere (`--isolation pod --agent claude`).
+
+    Tout le cycle de vie (Job, push/pull du workspace, timeout, nettoyage) est celui de
+    PodOpenCodeDriver ; seuls changent le binaire, la preparation du pod, la commande et le
+    parseur. Authentification : `CLAUDE_CODE_OAUTH_TOKEN` arrive par le Secret du run (`envFrom`)
+    et est herite par `kubectl exec` - il n'apparait JAMAIS dans la ligne de commande.
+
+    Le binaire est installe au demarrage du pod s'il manque (installeur officiel, dans $HOME : pas
+    besoin d'etre root). Cette duree est hors `agent_s`. Une installation en echec rend une cellule `never_ran`
+    (exclue des moyennes), pas un zero attribue a l'agent.
+    """
+    name = "pod-claude"
+    agent_binary = "claude"
+
+    def __init__(self, *args, claude_version: str = DEFAULT_POD_CLAUDE_VERSION,
+                 install_cmd: str | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.claude_version = claude_version
+        self.install_cmd = install_cmd or (
+            f"curl -fsSL {POD_CLAUDE_INSTALLER} | bash -s {shlex.quote(claude_version)}")
+
+    def _path(self) -> str:
+        return f"{POD_CLAUDE_BIN_DIR}:$PATH"
+
+    def prepare_pod(self, pod: str, workspace: Path) -> str | None:
+        probe = f"PATH={self._path()} command -v claude"
+        if self._sh(pod, probe, timeout=15).returncode == 0:
+            return None  # deja dans l'image (ou deja installe)
+        try:
+            r = self._sh(pod, self.install_cmd, timeout=POD_INSTALL_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            return f"installation de claude : timeout apres {POD_INSTALL_TIMEOUT_S}s"
+        if r.returncode != 0:
+            tail = ((r.stderr or "") + (r.stdout or "")).strip()[-500:]
+            return (f"installation de claude echouee (curl/bash absents de '{self.image}', ou "
+                    f"pas d'acces reseau a claude.ai / downloads.claude.ai ?) : {tail}")
+        if self._sh(pod, probe, timeout=15).returncode != 0:
+            return (f"claude introuvable apres l'installation (`{self.install_cmd}`) : "
+                    f"le binaire n'est ni dans {POD_CLAUDE_BIN_DIR} ni dans le PATH")
+        return None
+
+    def _sh(self, pod: str, cmd: str, *, timeout: float):
+        return subprocess.run(["kubectl", "exec", pod, "-n", self.namespace, "--", "sh", "-c", cmd],
+                              capture_output=True, text=True, timeout=timeout)
+
+    def exec_command(self, task, model) -> str:
+        # CLAUDE_CONFIG_DIR hors de pod_workdir (dossier pousse/rapatrie tel quel) et isole une
+        # eventuelle ~/.claude cuite dans l'image, qui s'appliquerait sinon a C0 aussi.
+        # stdin ferme : `claude -p` attend sinon des donnees sur stdin.
+        # DISABLE_AUTOUPDATER : la version installee est epinglee, elle ne doit pas se mettre a
+        # jour en cours de run (les cellules d'un meme run doivent partager la meme version).
+        claude_cmd = shlex.join(build_command("claude", task.prompt, model))
+        return (f"cd {shlex.quote(self.pod_workdir)} && PATH={self._path()} "
+                f"CLAUDE_CONFIG_DIR={shlex.quote(POD_CLAUDE_CONFIG_DIR)} DISABLE_AUTOUPDATER=1 "
+                f"timeout {task.timeout_s}s {claude_cmd} < /dev/null")
+
+    def parse(self, out: str) -> Transcript:
+        return parse_claude_stream(out)
