@@ -138,8 +138,12 @@ python -m bench run --isolation pod \
 ```
 
 **Image par défaut** (`--pod-image`, `bench.k8s.DEFAULT_POD_IMAGE`) :
-`inseefrlab/onyxia-vscode-r-python-julia:r4.6.1-py3.13.15-2026.09.07`. Choisie d'après la chaîne
-d'images [InseeFrLab/images-datascience](https://github.com/InseeFrLab/images-datascience)
+`ghcr.io/micedre/onyxia-agent-bench-pod:r4.6.1-py3.13.15-2026.09.07-claude2.1.286` : l'image Onyxia
+ci-dessous **plus Claude Code et les bibliothèques des tâches** (voir la section suivante), publiée
+sur GHCR (paquet public, tiré sans identifiants). Sa base,
+`inseefrlab/onyxia-vscode-r-python-julia:r4.6.1-py3.13.15-2026.09.07`
+(`bench.k8s.UPSTREAM_POD_IMAGE`), a été choisie d'après la chaîne d'images
+[InseeFrLab/images-datascience](https://github.com/InseeFrLab/images-datascience)
 (`base` → `r-minimal` → `r-python-julia` → variante `vscode`) :
 
 - **R + Python** (+ `uv`, `quarto`, `duckdb`, `git`, `curl`, `tar`, `kubectl`) : `t05` et `t26`
@@ -148,18 +152,19 @@ d'images [InseeFrLab/images-datascience](https://github.com/InseeFrLab/images-da
 - **tag daté**, pas le flottant `r4.6.1-py3.13.15` : fige R, Python et la version d'`opencode`, donc
   des runs comparables dans le temps ;
 - **Python 3.13**, celui de l'environnement de dev (la 3.14 est toute récente) ;
-- amd64 uniquement, ~2,8 Gio (premier tirage par nœud plus lent). Aucune image Onyxia n'embarque
-  `node`/`npm`.
+- amd64 uniquement, ~3,1 Gio compressés pour l'image par défaut (premier tirage par nœud plus
+  lent). Aucune image Onyxia n'embarque `node`/`npm`.
 
 Autre image : `--pod-image <image>` (elle doit contenir `tar` et le binaire de l'agent, ou de quoi
-l'installer pour `--agent claude`).
+l'installer pour `--agent claude`) ; `--pod-image inseefrlab/onyxia-vscode-r-python-julia:<tag>` pour
+repartir de l'image Onyxia seule (Claude y est alors installé à chaque cellule, voir plus bas).
 
 ### Image dérivée avec Claude Code et les bibliothèques des tâches (GHCR)
 
-`docker/pod/` construit une image **par-dessus l'image par défaut** : même base, plus ce que les
-cellules supposent sans le dire. Pour un run Claude en pod c'est la configuration recommandée : plus
-d'installation de ~240 Mo par cellule (~1 min 45 s mesurées), et les agents ne perdent ni temps ni
-tokens à installer des bibliothèques (durées de cellule comparables entre elles).
+`docker/pod/` construit **l'image par défaut** : l'image Onyxia amont, plus ce que les cellules
+supposent sans le dire. Plus d'installation de ~240 Mo par cellule (~1 min 45 s mesurées), et les
+agents ne perdent ni temps ni tokens à installer des bibliothèques (durées de cellule comparables
+entre elles).
 
 | Ajout | Détail |
 |---|---|
@@ -175,22 +180,24 @@ l'image sans jeton ni dépense** (versions, imports Python, paquets R), puis pou
 `<tag de la base>-claude<version>` (ex. `r4.6.1-py3.13.15-2026.09.07-claude2.1.286`), `sha-<commit>`
 et `latest`. Utiliser un tag explicite plutôt que `latest` dans un run dont on cite les chiffres.
 
-**Une fois, après le premier push** : GitHub → Packages → `onyxia-agent-bench-pod` → *Package
-settings* → *Change visibility* → **Public**. Un paquet GHCR est privé à sa création, et les Jobs
-du benchmark n'ont pas d'`imagePullSecrets` : un paquet privé donne un `ImagePullBackOff`, que le
-harnais range en `never_ran`.
+**Le paquet doit rester Public** (GitHub → Packages → `onyxia-agent-bench-pod` → *Package settings*
+→ *Change visibility*) : un paquet GHCR est privé à sa création, et les Jobs du benchmark n'ont pas
+d'`imagePullSecrets`. Un paquet privé donne un `ImagePullBackOff`, que le harnais range en
+`never_ran`.
 
 ```bash
 python -m bench run --agent claude --model claude-opus-5-5 --isolation pod \
-  --pod-image ghcr.io/micedre/onyxia-agent-bench-pod:r4.6.1-py3.13.15-2026.09.07-claude2.1.286 \
-  --suite context --configs C0,C4 --seeds 5
+  --suite context --configs C0,C4 --seeds 5          # image par défaut, claude déjà dedans
 # construction locale (Docker requis) :
 docker build -f docker/pod/Dockerfile -t onyxia-agent-bench-pod docker/pod
 ```
 
-Le Dockerfile et le harnais partagent leurs défauts (image de base = `DEFAULT_POD_IMAGE`, version de
-`claude` = `DEFAULT_POD_CLAUDE_VERSION`) ; `tests/test_pod_image_files.py` échoue s'ils divergent.
-Avec une autre image, l'installation de `claude` au démarrage du pod reste le repli.
+Le Dockerfile, le workflow et le harnais partagent leurs valeurs : `tests/test_pod_image_files.py`
+échoue si l'image de base (`UPSTREAM_POD_IMAGE`) ou la version de `claude`
+(`DEFAULT_POD_CLAUDE_VERSION`) du Dockerfile divergent du harnais, ou si `DEFAULT_POD_IMAGE` ne
+désigne pas le tag que le workflow publie pour ces valeurs. **Pour changer de version** : modifier
+l'ARG du Dockerfile, `DEFAULT_POD_CLAUDE_VERSION` et `DEFAULT_POD_IMAGE` ensemble, pousser, attendre
+le workflow.
 
 Comment ça marche (voir `bench/k8s.py` + `PodOpenCodeDriver` dans `bench/opencode_driver.py`) :
 namespace auto-détecté depuis le pod courant (ou `--pod-namespace`) ; un **Secret k8s créé une
@@ -497,8 +504,9 @@ python -m bench run --agent claude --model claude-opus-5-5 --isolation pod \
   --suite context --configs C0,C4 --seeds 5          # image par défaut, cf. ci-dessous
 ```
 
-Le jeton est poussé dans le Secret k8s du run (`envFrom`, jamais en ligne de commande). `claude` est
-**installé au démarrage du pod** s'il manque, avec l'installeur officiel épinglé :
+Le jeton est poussé dans le Secret k8s du run (`envFrom`, jamais en ligne de commande). L'image par
+défaut embarque déjà `claude` ; avec une autre image il est **installé au démarrage du pod** s'il
+manque, avec l'installeur officiel épinglé :
 `curl -fsSL https://claude.ai/install.sh | bash -s <version>` (dans `$HOME/.local/bin`, sans root,
 sans `node` : les images Onyxia n'en ont pas, et le paquet npm exige Node ≥ 22). La version est
 épinglée par `--pod-claude-version` (`X.Y.Z`, `stable` ou `latest` ; défaut : celle testée, et
@@ -509,10 +517,10 @@ dans l'image `tar`, `curl` et `bash` (présents dans l'image par défaut), et un
 cellule `never_ran` (exclue des moyennes), pas un zéro attribué à l'agent ; la durée d'installation
 compte dans `wall_clock_s`, pas dans `agent_s`.
 
-**Coût de l'installation** : le binaire fait ~240 Mo et l'installation a pris ~1 min 45 s sur un
-pod du cluster (mesuré), **à chaque cellule** — pour 100 cellules, ~24 Go téléchargés et ~3 h de
-pod en plus. Pour un gros run, construire une image dérivée de l'image par défaut qui embarque
-`claude` (l'installation est alors sautée dès que `claude` est dans le `PATH`).
+**Coût de l'installation (autre image seulement)** : le binaire fait ~240 Mo et l'installation a
+pris ~1 min 45 s sur un pod du cluster (mesuré), **à chaque cellule** — pour 100 cellules, ~24 Go
+téléchargés et ~3 h de pod en plus. L'image par défaut l'évite : l'installation est sautée dès que
+`claude` est dans le `PATH`.
 **Exposition résiduelle** : le jeton est dans l'environnement du conteneur, donc lisible par un
 agent qui a un shell (même nature d'exposition que la clé d'API d'OpenCode, mais c'est ici un
 identifiant d'abonnement) : utiliser un jeton dédié et révocable.

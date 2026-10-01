@@ -289,10 +289,11 @@ def main(argv=None):
                     help="process = sous-processus local (defaut) ; "
                          "pod = Job Kubernetes ephemere par cellule (isolation stricte)")
     pr.add_argument("--pod-image", default=k8s.DEFAULT_POD_IMAGE,
-                    help="image conteneur pour --isolation pod (defaut : %(default)s = R + "
-                         "Python + uv + quarto + opencode, tag date). Doit contenir `tar` ; "
-                         "`opencode` pour --agent opencode ; `curl` et `bash` pour --agent "
-                         "claude (installe au demarrage du pod s'il manque)")
+                    help="image conteneur pour --isolation pod (defaut : %(default)s = image Onyxia "
+                         "R + Python + opencode, plus claude et les bibliotheques des taches ; "
+                         "paquet GHCR public). Doit contenir `tar` ; `opencode` pour --agent "
+                         "opencode ; pour --agent claude, `claude` ou de quoi l'installer au "
+                         "demarrage du pod (`curl` et `bash`)")
     pr.add_argument("--pod-namespace", default=None,
                     help="namespace k8s (defaut : auto-detecte depuis le pod courant)")
     pr.add_argument("--pod-cpu-request", default="500m")

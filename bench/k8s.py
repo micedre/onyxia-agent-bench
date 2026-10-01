@@ -18,8 +18,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-# Image par defaut des cellules (`--isolation pod`, `--pod-image`). Choix, verifie sur la chaine
-# d'images InseeFrLab/images-datascience :
+# Image Onyxia de BASE des cellules. Choix, verifie sur la chaine d'images
+# InseeFrLab/images-datascience :
 #   * `r-python-julia` : R + Python (+ uv, quarto, duckdb, git, curl, tar, kubectl...) ; t05/t26
 #     demandent du R, une image Python seule handicaperait l'agent sur ces taches ;
 #   * variante `vscode` : c'est elle qui embarque `opencode` (install-opencode.sh), requis pour
@@ -27,8 +27,17 @@ from pathlib import Path
 #   * tag DATE, pas le flottant `r4.6.1-py3.13.15` : fige R, Python et la version d'opencode
 #     cuite dans l'image, donc des runs comparables dans le temps ;
 #   * Python 3.13 (celui de l'environnement de dev) plutot que 3.14 tout juste sorti.
-# amd64 uniquement, ~2,8 Gio.
-DEFAULT_POD_IMAGE = "inseefrlab/onyxia-vscode-r-python-julia:r4.6.1-py3.13.15-2026.09.07"
+# amd64 uniquement, ~2,8 Gio. C'est le `ARG BASE_IMAGE` de docker/pod/Dockerfile.
+UPSTREAM_POD_IMAGE = "inseefrlab/onyxia-vscode-r-python-julia:r4.6.1-py3.13.15-2026.09.07"
+
+# Image par defaut des cellules (`--isolation pod`, `--pod-image`) : la base ci-dessus + Claude Code
+# + les bibliotheques des taches, construite et publiee par .github/workflows/pod-image.yml.
+# Tag = <tag de la base>-claude<version> : epingle, donc comparable dans le temps. Le paquet GHCR
+# doit etre PUBLIC (les Jobs n'ont pas d'imagePullSecrets). tests/test_pod_image_files.py echoue si
+# ce tag diverge du Dockerfile (ARG BASE_IMAGE / CLAUDE_VERSION) ou du workflow (nom de l'image).
+# Pour repartir de l'image amont seule : `--pod-image <UPSTREAM_POD_IMAGE>` (claude y est alors
+# installe au demarrage du pod, ~1 min 45 s par cellule).
+DEFAULT_POD_IMAGE = "ghcr.io/micedre/onyxia-agent-bench-pod:r4.6.1-py3.13.15-2026.09.07-claude2.1.286"
 
 LABEL_APP = "app"
 APP_VALUE = "onyxia-agent-bench"

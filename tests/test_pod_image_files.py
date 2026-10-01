@@ -23,11 +23,20 @@ def _arg(name: str) -> str:
 
 
 def test_dockerfile_defaults_match_the_bench_defaults():
-    """Image de base du Dockerfile = image par defaut du harnais ; version de claude = celle que
-    le harnais installe en pod pour les autres images. Sinon les deux bras ne comparent plus la
+    """Image de base du Dockerfile = image amont du harnais ; version de claude = celle que le
+    harnais installe en pod pour les autres images. Sinon les deux bras ne comparent plus la
     meme chose."""
-    assert _arg("BASE_IMAGE") == k8s.DEFAULT_POD_IMAGE
+    assert _arg("BASE_IMAGE") == k8s.UPSTREAM_POD_IMAGE
     assert _arg("CLAUDE_VERSION") == DEFAULT_POD_CLAUDE_VERSION
+
+
+def test_default_pod_image_is_the_published_image_for_these_dockerfile_args():
+    """Le defaut du harnais doit designer exactement le tag que le workflow publie pour les ARG du
+    Dockerfile : <tag de la base>-claude<version> sur l'image du workflow. Sinon un run par defaut
+    tirerait une image qui n'existe pas (ImagePullBackOff, cellules `never_ran`)."""
+    base_tag = _arg("BASE_IMAGE").rsplit(":", 1)[1]
+    expected = f"{WORKFLOW['env']['IMAGE']}:{base_tag}-claude{_arg('CLAUDE_VERSION')}"
+    assert k8s.DEFAULT_POD_IMAGE == expected
 
 
 def test_scripts_are_executable_valid_bash():

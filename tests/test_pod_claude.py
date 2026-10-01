@@ -87,11 +87,13 @@ def test_default_install_uses_the_official_installer_pinned_and_no_node():
     assert _driver(install_cmd="curl x | sh").install_cmd == "curl x | sh"
 
 
-def test_default_pod_image_is_a_pinned_dated_tag():
+def test_pod_images_are_pinned_tags():
     import re
-    assert re.fullmatch(
-        r"inseefrlab/onyxia-vscode-r-python-julia:r\d+\.\d+\.\d+-py\d+\.\d+\.\d+-\d{4}\.\d{2}\.\d{2}",
-        k8s.DEFAULT_POD_IMAGE), k8s.DEFAULT_POD_IMAGE
+    dated = r"r\d+\.\d+\.\d+-py\d+\.\d+\.\d+-\d{4}\.\d{2}\.\d{2}"
+    assert re.fullmatch(rf"inseefrlab/onyxia-vscode-r-python-julia:{dated}",
+                        k8s.UPSTREAM_POD_IMAGE), k8s.UPSTREAM_POD_IMAGE
+    assert re.fullmatch(rf"ghcr\.io/micedre/onyxia-agent-bench-pod:{dated}-claude\d+\.\d+\.\d+",
+                        k8s.DEFAULT_POD_IMAGE), k8s.DEFAULT_POD_IMAGE
 
 
 def test_pod_image_defaults_when_not_given(monkeypatch):
