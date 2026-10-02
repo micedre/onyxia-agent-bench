@@ -18,6 +18,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from bench.cellenv import GIT_IDENTITY_ENV
+
 # Image Onyxia de BASE des cellules. Choix, verifie sur la chaine d'images
 # InseeFrLab/images-datascience :
 #   * `r-python-julia` : R + Python (+ uv, quarto, duckdb, git, curl, tar, kubectl...) ; t05/t26
@@ -115,6 +117,8 @@ def build_job_manifest(*, name: str, namespace: str, image: str, secret_name: st
                         "image": image,
                         "command": ["sleep", str(sleep_seconds)],
                         "envFrom": [{"secretRef": {"name": secret_name}}],
+                        # identite git commune (cf. bench/cellenv.py) : heritee par chaque exec
+                        "env": [{"name": k, "value": v} for k, v in GIT_IDENTITY_ENV.items()],
                         "resources": resources,
                     }],
                 },

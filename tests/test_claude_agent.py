@@ -61,7 +61,8 @@ def test_subagent_messages_do_not_pollute_final_text():
             {"type": "text", "text": "reponse du sous-agent"}]}},
         {"type": "assistant", "message": {"usage": USAGE, "content": [
             {"type": "text", "text": "reponse finale"}]}}))
-    assert t.text == "reponse finale" and t.assistant_turns == 2
+    assert t.text == "reponse finale"
+    assert t.assistant_turns == 1          # un message de sous-agent n'est pas un tour de l'agent principal
 
 
 def test_result_only_and_empty():
@@ -146,3 +147,146 @@ def test_real_stream_sample_auth_error():
     # un echec d'authentification n'est ni un resultat de l'agent ni un timeout : exclu des moyennes
     run = RunResult("t", "C0", "m", 0, Path("."), t, exit_code=1, error="exit=1")
     assert cell_status(run) == "error"
+
+
+# ------------------------------------------------------------------ vrais flux de cellules (v2.1.286)
+
+SUCCESS = Path(__file__).parent / "resources" / "claude_stream_success.ndjson"
+LIMIT = Path(__file__).parent / "resources" / "claude_stream_session_limit.ndjson"
+
+
+def _events(path):
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("{")]
+
+
+def test_real_success_stream_matches_claudes_own_totals():
+    """Vraie cellule reussie (t23/C4, Opus). Claude Code emet un evenement `assistant` par bloc de
+    contenu : compter chaque evenement doublait tours et tokens de cache (9 tours au lieu de 5, cache
+    lu 232 694 au lieu de 122 251, output 70 au lieu de 6 101). Les totaux de l'evenement `result`
+    font foi."""
+    raw = SUCCESS.read_text(encoding="utf-8")
+    ev = _events(SUCCESS)
+    res = next(e for e in reversed(ev) if e["type"] == "result")
+    usage = res["usage"]
+    t = parse_claude_stream(raw)
+    assert t.assistant_turns == res["num_turns"] == 5
+    assert t.tokens_cache_read == usage["cache_read_input_tokens"] == 122251
+    assert t.tokens_cache_write == usage["cache_creation_input_tokens"] == 20449
+    assert t.tokens_out == usage["output_tokens"] == 6101
+    assert t.tokens_in == (usage["input_tokens"] + usage["cache_read_input_tokens"]
+                           + usage["cache_creation_input_tokens"]) == 142710
+    assert t.tokens_total == 142710 + 6101
+    assert t.cost == res["total_cost_usd"] == 0.3101022
+    assert t.text.strip() and t.permission_rejections == 0
+
+
+def test_real_success_stream_blocks_of_one_message_share_a_turn():
+    ev = [e for e in _events(SUCCESS) if e["type"] == "assistant"]
+    ids = [e["message"]["id"] for e in ev]
+    assert len(ids) > len(set(ids)) == 5          # le piege est bien dans ce flux : 9 evenements, 5 tours
+    t = parse_claude_stream(SUCCESS.read_text(encoding="utf-8"))
+    turns = {e.turn for e in t.events}
+    assert turns <= set(range(1, 6)) and max(turns) <= t.assistant_turns
+    # la reponse finale (texte) est dans le DERNIER tour, pas au tour 9
+    assert t.message_events[-1].turn == t.assistant_turns == 5
+    first_seen = {}
+    for e in ev:
+        first_seen.setdefault(e["message"]["id"], len(first_seen) + 1)
+    for e in t.events:
+        assert e.turn == first_seen[e.raw["message"]["id"]]
+
+
+def test_real_session_limit_stream():
+    """La vraie sortie d'une cellule qui a atteint la limite de session de l'abonnement."""
+    from bench.schema import RunResult, cell_status
+    t = parse_claude_stream(LIMIT.read_text(encoding="utf-8"))
+    assert "You've hit your session limit" in t.text and "resets" in t.text
+    assert t.tokens_total == 0 and t.assistant_turns == 1
+    run = RunResult("t", "C0", "m", 0, Path("."), t, exit_code=1, error="exit=1")
+    assert cell_status(run) == "error"            # exclue des moyennes, pas un resultat de l'agent
+
+
+def _asst(mid, blocks, usage, **extra):
+    return json.dumps({"type": "assistant", "message": {"id": mid, "usage": usage, "content": blocks},
+                       **extra})
+
+
+def test_blocks_of_one_message_count_once_without_a_result_event():
+    """Cellule tuee avant `result` : on somme le DERNIER instantane de chaque message, une fois."""
+    u = {"input_tokens": 2, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 10,
+         "output_tokens": 7}
+    raw = "\n".join([
+        _asst("m1", [{"type": "thinking", "thinking": "..."}], u),
+        _asst("m1", [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}], u),
+        _asst("m2", [{"type": "text", "text": "fini"}], u)])
+    t = parse_claude_stream(raw)
+    assert t.assistant_turns == 2 and t.tokens_cache_read == 200 and t.tokens_in == 2 * 112
+    assert t.tool_events[0].turn == 1 and t.message_events[0].turn == 2
+
+
+def test_model_usage_includes_subagents_and_wins_over_usage():
+    """Verifie sur de vraies cellules avec sous-agents (6 sur 33) : `result.usage` ne couvre que l'agent
+    principal alors que `modelUsage` (qui fonde le cout) les inclut ; prendre `usage` sous-estimait le cout
+    de C4, qui delegue, de ~25 %."""
+    u = {"input_tokens": 1, "cache_read_input_tokens": 1, "output_tokens": 1}
+    raw = "\n".join([_asst("m1", [{"type": "text", "text": "a"}], u),
+                     json.dumps({"type": "result", "num_turns": 1, "total_cost_usd": 0.9,
+                                 "usage": {"input_tokens": 3, "cache_read_input_tokens": 400,
+                                           "cache_creation_input_tokens": 50, "output_tokens": 900},
+                                 "modelUsage": {
+                                     "claude-opus-5-5": {"inputTokens": 3, "cacheReadInputTokens": 400,
+                                                         "cacheCreationInputTokens": 50, "outputTokens": 900},
+                                     "claude-haiku-4-5": {"inputTokens": 2, "cacheReadInputTokens": 100,
+                                                          "cacheCreationInputTokens": 10, "outputTokens": 70}}})])
+    t = parse_claude_stream(raw)
+    assert (t.tokens_cache_read, t.tokens_cache_write, t.tokens_out) == (500, 60, 970)
+    assert t.tokens_in == 5 + 500 + 60 and t.cost == 0.9
+
+
+def test_real_success_stream_model_usage_equals_usage_without_subagents():
+    res = next(e for e in reversed(_events(SUCCESS)) if e["type"] == "result")
+    mu = next(iter(res["modelUsage"].values()))
+    assert mu["cacheReadInputTokens"] == res["usage"]["cache_read_input_tokens"]
+    assert mu["outputTokens"] == res["usage"]["output_tokens"]
+
+
+def test_result_usage_wins_over_event_snapshots():
+    u = {"input_tokens": 1, "cache_read_input_tokens": 1, "output_tokens": 1}
+    raw = "\n".join([_asst("m1", [{"type": "text", "text": "a"}], u),
+                     json.dumps({"type": "result", "num_turns": 1, "total_cost_usd": 0.5,
+                                 "usage": {"input_tokens": 3, "cache_read_input_tokens": 40,
+                                           "cache_creation_input_tokens": 5, "output_tokens": 900}})])
+    t = parse_claude_stream(raw)
+    assert (t.tokens_in, t.tokens_out, t.tokens_cache_read, t.tokens_cache_write) == (48, 900, 40, 5)
+
+
+def test_context_size_ignores_subagent_messages_and_repeated_blocks():
+    big = {"input_tokens": 1, "cache_read_input_tokens": 5000}
+    small = {"input_tokens": 1, "cache_read_input_tokens": 100}
+    raw = "\n".join([
+        _asst("m1", [{"type": "text", "text": "a"}], small),
+        _asst("m1", [{"type": "tool_use", "id": "t", "name": "Task", "input": {}}], small),
+        _asst("s1", [{"type": "text", "text": "sous-agent"}], big, parent_tool_use_id="t"),
+        _asst("m2", [{"type": "text", "text": "b"}], {"input_tokens": 1, "cache_read_input_tokens": 300})])
+    t = parse_claude_stream(raw)
+    assert t.assistant_turns == 2 and t.subagent_calls == 1          # m1 et m2 : le sous-agent n'en est pas un
+    assert (t.context_tokens_first, t.context_tokens_last) == (101, 301)   # sous-agent exclu
+    assert "sous-agent" not in t.text
+
+
+def test_subagent_tools_belong_to_the_turn_that_launched_them():
+    """Comme chez OpenCode ou la session enfant n'apparait pas dans le flux du parent : le travail d'un
+    sous-agent se passe DANS le tour de l'agent principal qui l'a lance, et ne decale pas les tours
+    suivants (le grader de t10 lit ces numeros)."""
+    u = {"input_tokens": 1}
+    raw = "\n".join([
+        _asst("m1", [{"type": "text", "text": "je delegue"}], u),
+        _asst("m2", [{"type": "tool_use", "id": "ta", "name": "Agent", "input": {}}], u),
+        _asst("s1", [{"type": "tool_use", "id": "ts1", "name": "Bash", "input": {}}], u, parent_tool_use_id="ta"),
+        _asst("s2", [{"type": "tool_use", "id": "ts2", "name": "Read", "input": {}}], u, parent_tool_use_id="ta"),
+        _asst("m3", [{"type": "text", "text": "fini"}], u)])
+    t = parse_claude_stream(raw)
+    assert t.assistant_turns == 3
+    by_name = {e.name: e.turn for e in t.tool_events}
+    assert by_name == {"Agent": 2, "Bash": 2, "Read": 2}               # le travail du sous-agent est au tour 2
+    assert [e.turn for e in t.message_events] == [1, 3]                 # m3 reste le tour 3, pas le 5

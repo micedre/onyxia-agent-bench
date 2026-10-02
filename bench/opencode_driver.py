@@ -28,6 +28,7 @@ import uuid
 from pathlib import Path
 
 from bench import k8s
+from bench.cellenv import GIT_IDENTITY_ENV
 from bench.schema import Event, RunResult, TaskSpec, Transcript
 
 # --------------------------------------------------------------------------------------
@@ -207,6 +208,7 @@ class RealOpenCodeDriver(BaseDriver):
 
     def run(self, task, workspace, model, seed, config_id) -> RunResult:
         env = os.environ.copy()
+        env.update(GIT_IDENTITY_ENV)       # identite git commune a toutes les cellules (cellenv)
         env.update(self.extra_env)
         # opencode lit opencode.json depuis le cwd ; on force aussi OPENCODE_CONFIG.
         env["OPENCODE_CONFIG"] = str(workspace / "opencode.json")

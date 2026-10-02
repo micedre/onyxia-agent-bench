@@ -18,6 +18,7 @@ from pathlib import Path
 
 from bench import k8s
 from bench.agents import AGENTS, make_driver
+from bench.cellenv import GIT_IDENTITY_META
 from bench.claude_driver import DEFAULT_POD_CLAUDE_VERSION
 from bench.configs import load_ladder
 from bench.mlflow_logging import HAS_MLFLOW, make_logger
@@ -190,7 +191,7 @@ def cmd_run(args):
             "pod_image": args.pod_image if args.isolation == "pod" else None,
             "claude_version": (args.pod_claude_version if args.agent == "claude"
                                and args.isolation == "pod" else None),
-            "harness_commit": GIT_COMMIT}
+            "harness_commit": GIT_COMMIT, "git_identity": GIT_IDENTITY_META}
 
     print(f"agent={args.agent} driver={driver.name} model={args.model} seeds={args.seeds} "
           f"workers={args.workers} suite={meta['suite']} "

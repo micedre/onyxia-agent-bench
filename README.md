@@ -543,6 +543,45 @@ Règles d'équité et limites, à citer avec les résultats :
 - Les tokens comptent le cache lu à chaque tour ; comparer la colonne « hors cache lu ». L'USD
   n'est publié que par Claude (0 pour les modèles auto-hébergés) et reste hors du score combiné.
 
+## Ce que « nu » veut dire avec Claude Code, et ce qu'on peut citer
+
+- **C0 avec Claude n'est pas « sans rien »** : c'est Claude Code tel quel. Le flux montre, dans C0, 18 skills,
+  5 sous-agents et 23 outils integres ; C4 y ajoute nos 15 skills et nos 5 sous-agents (33 et 10). L'ecart C4 − C0
+  mesure donc bien nos couches, mais le « nu » de Claude n'est pas celui d'OpenCode.
+- **Comptes de tokens et de tours** : Claude Code emet un evenement `assistant` par bloc de contenu (thinking,
+  tool_use, text) d'un meme tour, avec le meme `message.id` et le meme instantane d'usage. Le parseur compte donc
+  un tour par `message.id` **de l'agent principal** (le travail d'un sous-agent se passe dans le tour qui l'a
+  lance, comme chez OpenCode ou la session enfant n'est pas dans le flux du parent) et prend les totaux de
+  tokens dans l'evenement `result` de Claude : `modelUsage`, qui couvre tous les modeles **et les sous-agents** (et
+  fonde le cout en dollars) ; `usage` ne couvre que l'agent principal, ce qui sous-estimait le cout de C4, qui
+  delegue, de ~25 % sur les cellules concernees. Avant cette correction les tours et les tokens de cache
+  etaient doubles et `output_tokens` etait sous-estime d'un facteur ~100 (la somme des instantanes de streaming).
+  Le `num_turns` de Claude n'est pas reutilise : sur 33 cellules reelles il egale les tours vus dans le flux pour
+  22 seulement (+1 a +8 ailleurs : tours sans evenement visible, retours de sous-agents). Les tokens, eux, sont
+  exacts, et c'est la mesure de cout comparable entre agents. Le cout en dollars, la duree et tous les graders hors
+  `t10` (le seul a lire des numeros de tour) n'etaient pas touches.
+- **Limite de session de l'abonnement** : une fois atteinte en cours de run, toutes les cellules suivantes
+  echouent en quelques secondes avec « You've hit your session limit · resets 3pm (UTC) » (1 tour, 0 token).
+  Observe sur un run reel : 33 cellules valides sur 50, 11 paires C0/C4 seulement. Un run Claude avec des
+  cellules perdues **n'est pas citable** : le completer apres la reinitialisation de la limite.
+- **Identite git des cellules** (`bench/cellenv.py`) : un service Onyxia a `user.name`/`user.email` configures a
+  son demarrage, un Job de cellule n'en a aucun. Les cellules qui commitaient (t09, t18, t26, t27) butaient sur
+  « unable to auto-detect email address » : sur de vrais runs, Opus 7/7 cellules sur t09 et 5/6 sur t18, le 27B
+  7/10 et 6/10. Opus excluait pourtant le `.env` et ne stageait que `analyse.md`, mais refusait d'inventer une
+  identite, et le grader notait « pas de commit ». Chaque cellule recoit maintenant `bench <bench@local>` (celle
+  du commit des fixtures) en `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, en mode pod (env du conteneur du Job) comme en mode
+  process, pour les deux agents ; `meta.git_identity` la consigne. **Les runs anterieurs ne sont pas
+  comparables sur t09 et t18.**
+- **Re-noter un run termine depuis MLflow**, sans relancer d'agent (la sortie brute et le workspace de chaque
+  cellule y sont logges) :
+  ```bash
+  export MLFLOW_TRACKING_URI=... MLFLOW_TRACKING_USERNAME=... MLFLOW_TRACKING_PASSWORD=...   # jamais ecrits
+  python scripts/regrade_from_mlflow.py <id du run parent> --out runs/<nom>-regraded
+  ```
+  Il re-parse avec le parseur a jour, re-execute les graders, verifie que les totaux de chaque flux Claude egalent
+  ceux de l'evenement `result`, n'ecrit que `summary.json` et `report.md`, et affiche l'avant/apres. Lecture seule
+  sur MLflow.
+
 ## Prochaines étapes
 
 - **Échelle d'ablation plus fine** : rungs `C4-noperm` (garde-fous sans `bash: ask`) et

@@ -34,6 +34,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from bench.cellenv import GIT_IDENTITY_ENV
 from bench.opencode_driver import BaseDriver, PodOpenCodeDriver, _as_int
 from bench.schema import Event, RunResult, Transcript
 
@@ -67,9 +68,33 @@ def _usage_in(usage: dict) -> int:
 
 def parse_claude_stream(stdout: str) -> Transcript:
     """Transforme la sortie stream-json de `claude -p` en Transcript (meme contrat que
-    `opencode_driver.parse_output`). Les lignes non JSON (warnings...) sont ignorees."""
+    `opencode_driver.parse_output`). Les lignes non JSON (warnings...) sont ignorees.
+
+    Piege verifie sur de vrais flux : Claude Code emet UN evenement `assistant` PAR BLOC de contenu
+    (thinking, tool_use, text) d'un meme tour, tous avec le meme `message.id` et le meme instantane
+    d'usage. Compter chaque evenement comme un tour et sommer chaque instantane doublait les tours et
+    les tokens de cache (9 tours au lieu de 5, cache lu 232 694 au lieu de 122 251), et l'`output_tokens`
+    d'un evenement n'est qu'un compteur de streaming (3, 7, 8, 9...) : la somme valait 70 au lieu de
+    6 101. Donc :
+      * un tour = un `message.id` distinct DE L'AGENT PRINCIPAL (les evenements d'un meme message
+        partagent son numero) ; les messages d'un sous-agent (outil Task/Agent, `parent_tool_use_id`) ne
+        sont pas des tours : leurs outils portent le numero du tour qui les a lances, comme chez
+        OpenCode ou la session enfant n'apparait pas dans le flux du parent. L'`num_turns` de Claude peut
+        etre plus grand (tours sans evenement visible, retours de sous-agents : +1 a +8 sur 11 cellules
+        de 33) : il n'est donc pas reutilise, les tokens (exacts) sont la mesure comparable ;
+        sans id (anciens formats, flux fabriques) chaque evenement reste un tour ;
+      * les totaux de tokens viennent de l'evenement `result` : `modelUsage` (tous les modeles, sous-agents
+        compris, ce qui sert aussi au cout en dollars) ; sinon `usage` ; sinon (cellule tuee avant la
+        fin) la somme du dernier instantane de chaque message. Verifie sur 33 cellules reelles : sans
+        sous-agent, `usage` == `modelUsage` == somme par message (27/27) ; avec sous-agents (6), `usage`
+        ne couvre que l'agent principal alors que `modelUsage` == somme de TOUS les messages : prendre
+        `usage` aurait sous-estime le cout de C4, qui delegue, de ~25 %."""
     t = Transcript(raw_stdout=stdout)
     tool_events: dict[str, Event] = {}
+    turn_of: dict[object, int] = {}         # cle de message -> numero de tour (agent principal)
+    usage_of: dict[object, dict] = {}       # cle de message -> dernier instantane d'usage (tous)
+    is_sub: dict[object, bool] = {}         # message emis par un sous-agent ?
+    main_turns = 0
     result: dict | None = None
     for line in (stdout or "").splitlines():
         line = line.strip()
@@ -87,18 +112,16 @@ def parse_claude_stream(stdout: str) -> Transcript:
             # les sous-agents (outil Task) emettent aussi des messages, marques par
             # `parent_tool_use_id` : ils comptent comme tours/tokens, pas comme texte final.
             sub = bool(obj.get("parent_tool_use_id"))
-            t.assistant_turns += 1
-            turn = t.assistant_turns
-            usage = msg.get("usage") or {}
-            inp = _usage_in(usage)
-            t.tokens_in += inp
-            t.tokens_out += _as_int(usage.get("output_tokens"))
-            t.tokens_cache_read += _as_int(usage.get("cache_read_input_tokens"))
-            t.tokens_cache_write += _as_int(usage.get("cache_creation_input_tokens"))
-            if inp and not sub:
-                if not t.context_tokens_first:
-                    t.context_tokens_first = inp
-                t.context_tokens_last = inp
+            key = msg.get("id") or ("sans-id", len(usage_of))
+            if key not in is_sub:
+                is_sub[key] = sub
+                if not sub:
+                    main_turns += 1
+                    turn_of[key] = main_turns
+                else:                       # un sous-agent travaille DANS le tour qui l'a lance
+                    turn_of[key] = max(1, main_turns)
+            turn = turn_of[key]
+            usage_of[key] = msg.get("usage") or {}
             for block in msg.get("content") or []:
                 if not isinstance(block, dict):
                     continue
@@ -127,6 +150,39 @@ def parse_claude_stream(stdout: str) -> Transcript:
                         ev.status = "completed"
         elif typ == "result":
             result = obj
+
+    t.assistant_turns = main_turns
+    # taille du contexte au premier / dernier tour (messages de l'agent principal seulement)
+    for key in usage_of:
+        inp = _usage_in(usage_of.get(key) or {})
+        if inp and not is_sub[key]:
+            if not t.context_tokens_first:
+                t.context_tokens_first = inp
+            t.context_tokens_last = inp
+
+    res_usage = (result or {}).get("usage")
+    model_usage = (result or {}).get("modelUsage")
+    mu_keys = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens")
+    mu = ({k: sum(_as_int(m.get(k)) for m in model_usage.values() if isinstance(m, dict))
+           for k in mu_keys} if isinstance(model_usage, dict) else {})
+    token_keys = ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                  "cache_creation_input_tokens")
+    if any(mu.values()):
+        t.tokens_cache_read = mu["cacheReadInputTokens"]
+        t.tokens_cache_write = mu["cacheCreationInputTokens"]
+        t.tokens_in = mu["inputTokens"] + t.tokens_cache_read + t.tokens_cache_write
+        t.tokens_out = mu["outputTokens"]
+    elif isinstance(res_usage, dict) and any(_as_int(res_usage.get(k)) for k in token_keys):
+        t.tokens_in = _usage_in(res_usage)
+        t.tokens_out = _as_int(res_usage.get("output_tokens"))
+        t.tokens_cache_read = _as_int(res_usage.get("cache_read_input_tokens"))
+        t.tokens_cache_write = _as_int(res_usage.get("cache_creation_input_tokens"))
+    else:
+        for u in usage_of.values():
+            t.tokens_in += _usage_in(u)
+            t.tokens_out += _as_int(u.get("output_tokens"))
+            t.tokens_cache_read += _as_int(u.get("cache_read_input_tokens"))
+            t.tokens_cache_write += _as_int(u.get("cache_creation_input_tokens"))
 
     if result is not None:
         try:
@@ -161,6 +217,35 @@ def build_command(binary: str, prompt: str, model: str) -> list[str]:
     return cmd
 
 
+def isolated_config_dir() -> str:
+    """CLAUDE_CONFIG_DIR temporaire : sans ca, les skills/CLAUDE.md/agents utilisateur de
+    ~/.claude s'appliquent a TOUTES les cellules, C0 compris (meme piege que XDG_* pour
+    opencode). Sans ANTHROPIC_API_KEY ni CLAUDE_CODE_OAUTH_TOKEN, on recopie les identifiants
+    OAuth pour rester authentifie."""
+    d = tempfile.mkdtemp(prefix="bench-claude-")
+    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")):
+        cred = Path.home() / ".claude" / ".credentials.json"
+        if cred.is_file():
+            shutil.copy2(cred, Path(d) / ".credentials.json")
+    return d
+
+
+def subprocess_env(config_dir: str, workspace: Path | None = None,
+                   extra: dict | None = None) -> dict:
+    """Environnement d'un `claude -p` lance par le harnais : celui du processus, sans le contexte
+    d'une session Claude Code parente (mais en gardant le jeton OAuth, qui authentifie la cellule),
+    avec un CLAUDE_CONFIG_DIR isole."""
+    env = os.environ.copy()
+    env.update(extra or {})
+    for k in [k for k in env if (k.startswith("CLAUDE_CODE_") and k != "CLAUDE_CODE_OAUTH_TOKEN")
+              or k in ("CLAUDECODE", "CLAUDE_PID")]:
+        env.pop(k)
+    if workspace is not None:
+        env["PWD"] = str(workspace)
+    env["CLAUDE_CONFIG_DIR"] = config_dir
+    return env
+
+
 class ClaudeCodeDriver(BaseDriver):
     name = "claude"
 
@@ -168,29 +253,9 @@ class ClaudeCodeDriver(BaseDriver):
         self.binary = binary
         self.extra_env = extra_env or {}
 
-    def _isolated_config_dir(self) -> str:
-        """CLAUDE_CONFIG_DIR temporaire : sans ca, les skills/CLAUDE.md/agents utilisateur de
-        ~/.claude s'appliquent a TOUTES les cellules, C0 compris (meme piege que XDG_* pour
-        opencode). Sans ANTHROPIC_API_KEY, on recopie les identifiants OAuth pour rester
-        authentifie."""
-        d = tempfile.mkdtemp(prefix="bench-claude-")
-        if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")):
-            cred = Path.home() / ".claude" / ".credentials.json"
-            if cred.is_file():
-                shutil.copy2(cred, Path(d) / ".credentials.json")
-        return d
-
     def run(self, task, workspace, model, seed, config_id) -> RunResult:
-        env = os.environ.copy()
-        env.update(self.extra_env)
-        # Ne pas heriter du contexte d'une session Claude Code parente.
-        # (mais pas le jeton OAuth : c'est l'authentification de la cellule)
-        for k in [k for k in env if (k.startswith("CLAUDE_CODE_") and k != "CLAUDE_CODE_OAUTH_TOKEN")
-                  or k in ("CLAUDECODE", "CLAUDE_PID")]:
-            env.pop(k)
-        env["PWD"] = str(workspace)
-        cfg_dir = self._isolated_config_dir()
-        env["CLAUDE_CONFIG_DIR"] = cfg_dir
+        cfg_dir = isolated_config_dir()
+        env = subprocess_env(cfg_dir, workspace, {**GIT_IDENTITY_ENV, **self.extra_env})
         cmd = build_command(self.binary, task.prompt, model)
         t0 = time.time()
         timed_out = False
