@@ -6,6 +6,8 @@ loggue comme artefact MLflow sur le run parent (`bench/mlflow_logging.py:log_sum
 """
 from __future__ import annotations
 
+from collections import Counter
+
 from bench.schema import AXES, QUALITY_AXES, VALID_STATUSES
 
 AXIS_LABELS = {
@@ -54,11 +56,13 @@ def _cell_header(rec: dict) -> str:
     extra = f", steps_to_diagnosis={rec['metrics']['steps_to_diagnosis']}" \
         if "steps_to_diagnosis" in rec.get("metrics", {}) else ""
     excl = "" if status in VALID_STATUSES else " (exclue des moyennes)"
+    msg = (f"\n- Message de l'agent : « {rec['agent_message']} »"
+           if rec.get("agent_message") else "")
     return (f"### {rec['task']} / {rec['config']} / seed{rec['seed']} — {label}{excl}\n\n"
             f"- Scores : {scores or '–'}\n"
             f"- tokens={_fmt_int(rec.get('tokens_total', 0))} · tours={rec.get('assistant_turns', 0)} "
             f"· tool_calls={rec.get('tool_calls', 0)} · rejets_permission={rec.get('permission_rejections', 0)} "
-            f"· wall_clock={rec.get('wall_clock_s', 0):.1f}s{extra}")
+            f"· wall_clock={rec.get('wall_clock_s', 0):.1f}s{extra}{msg}")
 
 
 def _cell_checks(rec: dict) -> str:
@@ -73,6 +77,11 @@ def _cell_checks(rec: dict) -> str:
         detail = str(c["detail"]).replace("\n", " ")
         lines.append(f"  - {mark} `{c['name']}` ({c['axis']}, {_fmt(c['score'])}) — {detail}")
     return "\n".join(lines)
+
+
+def frequent_messages(records: list[dict], top: int = 5) -> list[tuple[str, int]]:
+    """Messages d'agent des cellules perdues, du plus frequent au moins frequent."""
+    return Counter(r["agent_message"] for r in records if r.get("agent_message")).most_common(top)
 
 
 def render_markdown(summary: dict, meta: dict) -> str:
@@ -92,11 +101,20 @@ def render_markdown(summary: dict, meta: dict) -> str:
                f"Configs : {', '.join(meta.get('configs', []))} · {n_cells} cellules "
                f"({n_valid} valides)")
     extra_meta = {k: v for k, v in meta.items()
-                  if k not in ("run_name", "model", "seeds", "tasks", "configs")}
+                  if k not in ("run_name", "model", "seeds", "tasks", "configs", "aborted")}
     if extra_meta:
         out.append("")
         out.append("Invocation : " + " · ".join(f"{k}=`{v}`" for k, v in extra_meta.items()))
     out.append("")
+
+    aborted = meta.get("aborted")
+    if aborted:
+        out.append(f"> 🛑 **RUN INTERROMPU** : {aborted.get('reason', '?')} ; "
+                   f"{aborted.get('cells_skipped', 0)} cellule(s) jamais lancee(s). "
+                   f"Dernier message de l'agent : « {aborted.get('last_message', '?')} ». "
+                   "Corriger la cause (modele, jeton, quota) avant de relancer : ce n'est pas un "
+                   "resultat de benchmark.")
+        out.append("")
 
     out.append("## Ce que mesure chaque axe")
     out.append("")
@@ -139,6 +157,13 @@ def render_markdown(summary: dict, meta: dict) -> str:
         if lost:
             out.append(f"> ⚠️ {lost} cellule(s) non valides sur {n_cells} : voir "
                        "`k8s_failure.txt` dans le dossier des cellules concernees.")
+            out.append("")
+        freq = frequent_messages(records)
+        if freq:
+            out.append("### Messages d'erreur les plus frequents")
+            out.append("")
+            out.append(_table(["cellules", "message de l'agent"],
+                              [[str(n), m.replace("|", "\\|")] for m, n in freq]))
             out.append("")
 
     out.append("## Resume par config (cellules valides)")

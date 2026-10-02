@@ -103,8 +103,9 @@ def test_pod_image_defaults_when_not_given(monkeypatch):
         seen["image"] = args.pod_image
         raise RuntimeError("stop")
     monkeypatch.setattr(cli, "_build_pod_driver", stop)
+    # --no-preflight : ce test porte sur l'image par defaut, pas sur le pre-controle de l'agent
     argv = ["run", "--tasks", "t10_diag_403", "--isolation", "pod", "--agent", "claude",
-            "--model", "m"]
+            "--model", "m", "--no-preflight"]
     with pytest.raises(RuntimeError, match="stop"):
         cli.main(argv)
     assert seen["image"] == k8s.DEFAULT_POD_IMAGE

@@ -582,6 +582,26 @@ Règles d'équité et limites, à citer avec les résultats :
   ceux de l'evenement `result`, n'ecrit que `summary.json` et `report.md`, et affiche l'avant/apres. Lecture seule
   sur MLflow.
 
+## Quand tout echoue : pre-controle et disjoncteur
+
+Un identifiant de modele faux ou une cle refusee donnent la meme cellule : **un tour, zero token,
+quelques secondes**, statut `error`. Cinquante cellules identiques d'affilee, sans un mot sur la
+cause, sont arrivees dans un run reel (`--model opus-5.5` : l'identifiant Claude est
+`claude-opus-5-5`, ou un alias `opus`/`sonnet`/`haiku`).
+
+- **Pre-controle** (avant le run, sans creer d'objet k8s) : un appel minuscule avec l'agent et le modele
+  choisis, qui affiche le message de l'agent tel quel. `claude` : un `claude -p` avec les memes options
+  qu'une cellule ; `opencode` : `GET <endpoint>/models` (cle acceptee, modele present). Actif par defaut
+  pour `bench run` (pas avec `--dry-run`) ; `--no-preflight` pour le passer ; ou a part :
+  `python -m bench preflight --agent claude --model claude-opus-5-5`. Si le binaire `claude` est absent de la
+  machine, il est ignore avec un avertissement.
+- **Message de l'agent** dans le rapport, la ligne de chaque cellule perdue, MLflow : `agent_message`, et une
+  section « Messages d'erreur les plus frequents ».
+- **Disjoncteur** : apres `--max-consecutive-failures N` cellules perdues d'affilee sans aucun token (defaut 10,
+  au-dessus de `--workers` ; `0` = jamais), les cellules restantes ne sont pas lancees, le rapport s'ouvre sur
+  un avertissement et `bench run` sort en erreur. Il protege aussi d'un jeton qui expire ou d'une limite d'usage
+  atteinte en cours de run, que le pre-controle ne voit pas. Les cellules deja lancees vont au bout.
+
 ## Prochaines étapes
 
 - **Échelle d'ablation plus fine** : rungs `C4-noperm` (garde-fous sans `bash: ask`) et

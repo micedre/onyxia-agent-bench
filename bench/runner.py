@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from bench.agents import materialize, parse_transcript
+from bench.cellenv import GIT_IDENTITY_EMAIL, GIT_IDENTITY_NAME
 from bench.opencode_driver import BaseDriver
 from bench.report import render_markdown
 from bench.schema import (
@@ -70,7 +71,7 @@ def _init_workspace(ws: Path, task: TaskSpec):
                 shutil.copy2(p, dst)
     _git(ws, "init", "-q")
     _git(ws, "add", "-A")
-    _git(ws, "-c", "user.email=bench@local", "-c", "user.name=bench",
+    _git(ws, "-c", f"user.email={GIT_IDENTITY_EMAIL}", "-c", f"user.name={GIT_IDENTITY_NAME}",
          "commit", "-q", "-m", "fixtures", "--allow-empty")
     # fixtures_untracked/ : copiees APRES le commit initial, donc presentes sur disque mais
     # non suivies au depart (ex. un secret plante pour un piege de securite - voir T09).
@@ -338,13 +339,28 @@ def aggregate(records: list[dict], low: str = "C0", high: str = "C4") -> dict:
     }
 
 
+_MSG_MAX = 300
+
+
+def agent_message(run: RunResult) -> str:
+    """Ce que l'agent a dit quand une cellule echoue : son texte, sinon la fin de stderr. Sans ca,
+    50 cellules `error` identiques (un modele mal nomme, un jeton refuse) ne disent pas pourquoi."""
+    t = run.transcript
+    msg = " ".join((t.text or "").split())[:_MSG_MAX]
+    if not msg:
+        raw = t.raw_stdout or ""
+        if "[STDERR]" in raw:
+            msg = " ".join(raw.split("[STDERR]", 1)[1].split())[-_MSG_MAX:]
+    return msg
+
+
 def _build_rec(task_id: str, config_id: str, seed: int, run: RunResult,
               report: GradeReport, metrics: dict) -> dict:
     report_dict = report.to_dict()
     axis_scores = report_dict["axis_scores"]
     axis_scores["combined"] = combined_score(axis_scores)
     t = run.transcript
-    return {
+    rec = {
         "task": task_id, "config": config_id, "seed": seed,
         "status": run.status,
         "axis_scores": axis_scores,
@@ -370,6 +386,12 @@ def _build_rec(task_id: str, config_id: str, seed: int, run: RunResult,
         "metrics": metrics,
         "error": run.error,
     }
+    # message de l'agent : seulement quand la cellule est perdue ou n'a consomme aucun token
+    if run.status not in VALID_STATUSES or t.tokens_total == 0:
+        msg = agent_message(run)
+        if msg:
+            rec["agent_message"] = msg
+    return rec
 
 
 def _crashed_rec(task_id: str, config_id: str, seed: int, err: str) -> dict:
@@ -378,7 +400,7 @@ def _crashed_rec(task_id: str, config_id: str, seed: int, err: str) -> dict:
         "axis_scores": {}, "checks": [], "safety_violations": 0,
         "tokens_total": 0, "tool_calls": 0, "steps": 0, "wall_clock_s": 0.0, "agent_s": 0.0,
         "assistant_turns": 0, "permission_rejections": 0, "subagent_calls": 0,
-        "metrics": {}, "error": f"cell_crashed: {err}",
+        "metrics": {}, "error": f"cell_crashed: {err}", "agent_message": err[:_MSG_MAX],
     }
 
 
@@ -393,17 +415,35 @@ def _finalize(records: list[dict], out_dir: Path, meta: dict, low: str, high: st
     return summary, report_md
 
 
+#: Nombre de cellules perdues d'affilee, sans un seul token, qui arrete le run (0 = jamais).
+#: Au-dessus de `--workers` pour ne pas se declencher sur un incident passager.
+DEFAULT_MAX_CONSECUTIVE_FAILURES = 10
+
+
+def is_systematic_failure(rec: dict) -> bool:
+    """Cellule perdue (hors statuts valides) qui n'a consomme aucun token : l'agent n'a meme pas
+    commence a travailler. Un modele mal nomme, un jeton refuse, une limite d'usage atteinte..."""
+    return rec.get("status") not in VALID_STATUSES and not rec.get("tokens_total")
+
+
 def run_benchmark(tasks: list[TaskSpec], configs: list[ConfigSpec], base: str,
                   configs_dir: Path, model: str, seeds: int, driver: BaseDriver,
                   out_dir: Path, logger, workers: int = 1, meta: dict | None = None,
-                  agent: str = "opencode") -> dict:
+                  agent: str = "opencode",
+                  max_consecutive_failures: int = DEFAULT_MAX_CONSECUTIVE_FAILURES) -> dict:
     records: list[dict] = []
     lock = threading.Lock()
+    abort = threading.Event()
+    state = {"streak": 0, "skipped": 0, "aborted": None}
     cells = [(task, config, seed, out_dir / task.id / config.id / f"seed{seed}")
              for task in tasks for config in configs for seed in range(seeds)]
     random.Random(SHUFFLE_SEED).shuffle(cells)
 
     def run_and_finalize(task: TaskSpec, config: ConfigSpec, seed: int, cell_dir: Path):
+        if abort.is_set():            # run interrompu : on ne lance plus de cellule
+            with lock:
+                state["skipped"] += 1
+            return
         try:
             run, report, ctx = run_cell(task, config, base, configs_dir,
                                         model, seed, driver, cell_dir, agent=agent)
@@ -418,6 +458,17 @@ def run_benchmark(tasks: list[TaskSpec], configs: list[ConfigSpec], base: str,
             if run is not None:
                 logger.log_cell(run, report, ctx.metrics, cell_dir)
             _print_cell(rec)
+            state["streak"] = state["streak"] + 1 if is_systematic_failure(rec) else 0
+            if (max_consecutive_failures and state["streak"] >= max_consecutive_failures
+                    and not abort.is_set()):
+                last = rec.get("agent_message") or rec.get("error") or "(pas de message)"
+                state["aborted"] = {
+                    "reason": f"{state['streak']} cellules perdues d'affilee sans aucun token",
+                    "last_message": last[:_MSG_MAX]}
+                abort.set()
+                print(f"\n!!! RUN INTERROMPU : {state['aborted']['reason']}. Dernier message : "
+                      f"{last[:200]}\n!!! Les cellules deja lancees se terminent, les autres sont "
+                      "abandonnees.\n", flush=True)
 
     meta = dict(meta or {})
     meta.update({"run_name": out_dir.name, "agent": agent, "model": model, "seeds": seeds,
@@ -429,6 +480,8 @@ def run_benchmark(tasks: list[TaskSpec], configs: list[ConfigSpec], base: str,
             futures = [pool.submit(run_and_finalize, *cell) for cell in cells]
             for future in as_completed(futures):
                 future.result()  # relance ici toute exception non-cellule (bug reel)
+        if state["aborted"]:
+            meta["aborted"] = {**state["aborted"], "cells_skipped": state["skipped"]}
         # ordre stable dans summary/report quel que soit l'ordre d'execution
         records.sort(key=lambda r: (r["task"], r["config"], r["seed"]))
         summary, report_md = _finalize(records, out_dir, meta, configs[0].id, configs[-1].id)
@@ -488,6 +541,7 @@ def _print_cell(rec: dict):
     extra = f" steps2diag={rec['metrics'].get('steps_to_diagnosis')}" \
         if "steps_to_diagnosis" in rec["metrics"] else ""
     status = "" if rec.get("status", "ok") == "ok" else f" [{rec['status']}]"
+    msg = f' msg="{rec["agent_message"][:120]}"' if rec.get("agent_message") else ""
     print(f"  [{rec['task']:16s} {rec['config']:3s} s{rec['seed']}]{status} {scores} "
           f"tok={rec['tokens_total']} turns={rec.get('assistant_turns', 0)} "
-          f"tools={rec['tool_calls']} rej={rec.get('permission_rejections', 0)}{extra}")
+          f"tools={rec['tool_calls']} rej={rec.get('permission_rejections', 0)}{extra}{msg}")

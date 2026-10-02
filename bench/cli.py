@@ -24,6 +24,7 @@ from bench.configs import load_ladder
 from bench.mlflow_logging import HAS_MLFLOW, make_logger
 from bench.opencode_driver import MockOpenCodeDriver, PodOpenCodeDriver
 from bench.registry import discover_tasks
+from bench.runner import DEFAULT_MAX_CONSECUTIVE_FAILURES
 from bench.schema import AXES
 
 try:
@@ -172,6 +173,16 @@ def cmd_run(args):
             raise SystemExit("--model est requis avec --agent claude (ex. claude-opus-5-5)")
     args.model = args.model or "onyxia/qwen3-6-35b-moe"
 
+    # Pre-controle AVANT de creer le moindre Secret/Job : un modele mal nomme ou une cle refusee
+    # donnent 50 cellules identiques (1 tour, 0 token) qu'on ne decouvre qu'a la fin.
+    if not args.dry_run and not args.no_preflight:
+        from bench.preflight import run_preflight
+        pre = run_preflight(args.agent, args.model)
+        print(f"[preflight] {'OK' if pre.ok else 'ECHEC'} : {pre.message}")
+        if not pre.ok:
+            raise SystemExit(f"pre-controle echoue pour --agent {args.agent} --model {args.model} "
+                             "(--no-preflight pour passer outre)")
+
     cleanup = None
     if args.dry_run:
         driver = MockOpenCodeDriver()
@@ -201,11 +212,16 @@ def cmd_run(args):
         from bench.runner import run_benchmark
         summary = run_benchmark(tasks, configs, base, CONFIGS_DIR, args.model, args.seeds,
                                 driver, out_dir, logger, workers=args.workers, meta=meta,
-                                agent=args.agent)
+                                agent=args.agent,
+                                max_consecutive_failures=args.max_consecutive_failures)
     finally:
         if cleanup:
             cleanup()
     _print_summary(summary, out_dir)
+    aborted = (summary.get("meta") or {}).get("aborted")
+    if aborted:
+        raise SystemExit(f"run interrompu : {aborted['reason']} ({aborted['cells_skipped']} cellules "
+                         f"non lancees). Dernier message : {aborted['last_message']}")
 
 
 def _print_summary(summary, out_dir: Path):
@@ -254,6 +270,17 @@ def cmd_compare(args):
         print(f"comparaison -> {args.out}")
     else:
         print(md)
+
+
+def cmd_preflight(args):
+    from bench.preflight import run_preflight
+    model = args.model or ("onyxia/qwen3-6-35b-moe" if args.agent == "opencode" else None)
+    if not model:
+        raise SystemExit("--model est requis avec --agent claude (ex. claude-opus-5-5)")
+    res = run_preflight(args.agent, model)
+    print(f"[preflight] {'OK' if res.ok else 'ECHEC'}{' (ignore)' if res.skipped else ''} : "
+          f"{res.message}")
+    raise SystemExit(0 if res.ok else 1)
 
 
 def main(argv=None):
@@ -319,6 +346,14 @@ def main(argv=None):
     pr.add_argument("--pod-orphan-max-age-s", type=float, default=None,
                     help="age (s) au-dela duquel un job/secret d'un AUTRE run est balaye au "
                          "demarrage (defaut : 2x le plus grand timeout de tache selectionnee)")
+    pr.add_argument("--no-preflight", action="store_true",
+                    help="ne pas verifier avant le run que l'agent repond avec ce modele et ces "
+                         "identifiants (un appel minuscule)")
+    pr.add_argument("--max-consecutive-failures", type=int,
+                    default=DEFAULT_MAX_CONSECUTIVE_FAILURES,
+                    help="arreter le run apres N cellules perdues d'affilee sans aucun token "
+                         "(modele mal nomme, jeton refuse, quota atteint...) ; 0 = jamais "
+                         "(defaut %(default)s, au-dessus de --workers)")
     pr.add_argument("--no-mlflow", action="store_true")
     pr.add_argument("--experiment", default="opencode-onyxia-bench")
     pr.add_argument("--run-name", default=None)
@@ -334,6 +369,12 @@ def main(argv=None):
     pg.add_argument("run_dir", help="ex. runs/bench-20260902-044546")
     pg.add_argument("--out", default=None, help="dossier de sortie (defaut : <run_dir>/regrade)")
     pg.set_defaults(func=cmd_regrade)
+
+    pp = sub.add_parser("preflight", help="verifier qu'un agent repond avec ce modele et ces "
+                                          "identifiants, sans lancer de run")
+    pp.add_argument("--agent", choices=AGENTS, default="opencode")
+    pp.add_argument("--model", default=None)
+    pp.set_defaults(func=cmd_preflight)
 
     pc = sub.add_parser("compare", help="comparer des runs (agent x modele) cote a cote")
     pc.add_argument("run_dirs", nargs="+", help="dossiers de run ; le premier sert de reference")
