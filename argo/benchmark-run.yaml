@@ -1,0 +1,40 @@
+# Un run du benchmark, a editer puis a lancer avec :
+#   kubectl create -f argo/benchmark-run.yaml        # create, PAS apply (generateName)
+#   kubectl get workflows -l app=onyxia-agent-bench-workflow
+#   kubectl logs -f -l workflows.argoproj.io/workflow=<nom>,workflows.argoproj.io/completed=false -c main
+#
+# Equivalent avec la CLI argo (les parametres se passent par -p, sans editer ce fichier) :
+#   argo submit --from workflowtemplate/onyxia-agent-bench -p agent=claude -p model=claude-opus-5-5 \
+#       -p suite=context -p seeds=5 -p experiment=ntts2027 --watch
+#
+# Ne mettre AUCUN secret ici : ils vivent dans le Secret du namespace (argo/README.md).
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: onyxia-agent-bench-
+  labels:
+    app: onyxia-agent-bench-workflow
+spec:
+  serviceAccountName: argo-workflows
+  workflowTemplateRef:
+    name: onyxia-agent-bench
+  arguments:
+    parameters:
+      - name: agent
+        value: claude                 # opencode | claude
+      - name: model
+        value: claude-opus-5-5        # opencode : provider/model, ex. onyxia/qwen3-6-35b-moe (vide = defaut)
+      - name: suite
+        value: context                # context | model | candidate | all
+      # - name: tasks                 # decommenter pour des taches precises (remplace suite)
+      #   value: "t10_diag_403,t03_mlflow_train"
+      - name: configs
+        value: "C0,C4"
+      - name: seeds
+        value: "5"
+      - name: workers
+        value: "4"
+      - name: experiment
+        value: "ntts2027"
+      # - name: repo_ref              # epingler un sha pour un run dont on cite les chiffres
+      #   value: "3c48177"

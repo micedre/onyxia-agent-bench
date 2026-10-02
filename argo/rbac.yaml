@@ -1,0 +1,64 @@
+# Role + RoleBinding de l'orchestrateur (isolation pod), lies au ServiceAccount `argo-workflows`.
+#
+# POURQUOI PAS UN SERVICEACCOUNT DEDIE : le service « Argo Workflows » du catalogue Onyxia (v3.6, mode
+# namespace) donne le droit `workflowtaskresults` (create/patch), dont l'executor a besoin dans chaque
+# pod de workflow, au seul ServiceAccount `argo-workflows`. Un ServiceAccount a nous ne pourrait pas
+# le recevoir : Kubernetes interdit d'accorder un droit qu'on ne detient pas soi-meme ("attempting to
+# grant RBAC permissions not currently held"), et le ClusterRole `admin` ne le contient pas. On
+# ajoute donc NOTRE Role a ce ServiceAccount, ce qui est permis (il ne couvre que Jobs, Pods, Secrets...).
+# Consequence : tous les workflows du namespace lances avec `argo-workflows` heritent de ces droits.
+# Les pods de cellule, eux, tournent avec le SA `default` et ne les ont pas.
+#
+# Le Role est derive de ce que le harnais appelle reellement (bench/k8s.py) :
+#   apply / delete / get / wait / list   Jobs, Pods          -> un Job ephemere par cellule
+#   exec                                  pods/exec           -> pousser le workspace, lancer l'agent, le rapatrier
+#   create / get / list / delete          Secrets             -> Secret par run (identifiants de l'agent)
+#   get / list                            events, resourcequotas -> diagnostic d'un pod jamais pret
+#
+# A SAVOIR : on ne peut pas restreindre `list`/`get` des Secrets par etiquette en RBAC (les noms sont
+# dynamiques : bench-creds-<run>). Ce SA peut donc LIRE tous les Secrets du namespace.
+#
+# Prerequis : le service Argo Workflows lance depuis le catalogue Onyxia, dans ce namespace
+# (`kubectl get sa argo-workflows`). Si son ServiceAccount a un autre nom, remplacer `argo-workflows`
+# ci-dessous, dans benchmark-run.yaml et dans benchmark-workflowtemplate.yaml.
+#
+# Namespace : le champ `subjects[].namespace` d'un RoleBinding est obligatoire, d'ou le marqueur :
+#   NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)   # ou votre namespace Onyxia
+#   sed "s/__NAMESPACE__/$NS/" argo/rbac.yaml | kubectl apply -n "$NS" -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: onyxia-agent-bench
+  labels:
+    app: onyxia-agent-bench-workflow
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["events", "resourcequotas"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: onyxia-agent-bench
+  labels:
+    app: onyxia-agent-bench-workflow
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflows
+    namespace: __NAMESPACE__
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: onyxia-agent-bench

@@ -1,0 +1,308 @@
+# WorkflowTemplate : lance onyxia-agent-bench sur le cluster, avec les resultats dans MLflow.
+#
+#   kubectl apply  -f argo/rbac.yaml                      # une fois (voir argo/README.md)
+#   kubectl apply  -f argo/benchmark-workflowtemplate.yaml    # le modele de workflow (apply : pas de generateName)
+#   kubectl create -f argo/benchmark-run.yaml             # un run (create, PAS apply : generateName)
+#   argo submit --from workflowtemplate/onyxia-agent-bench -p agent=claude -p model=claude-opus-5-5
+#
+# Secret attendu dans le namespace (nom : parametre `secret_name`) : voir argo/README.md.
+# Une cle absente n'est pas une erreur en soi (envFrom optionnel) : le script verifie celles dont
+# l'agent choisi a besoin et s'arrete AVANT de lancer quoi que ce soit si elles manquent.
+#
+# Un pod "orchestrateur" execute `python -m bench run`. En `isolation=pod` (defaut) il cree lui-meme
+# un Job ephemere par cellule (c'est le mode strict : l'agent n'y voit que sa propre cle) ; il lui
+# faut donc les droits de argo/rbac.yaml sur le ServiceAccount `argo-workflows`. Les parametres arrivent au script par des
+# variables d'environnement, jamais interpoles dans le source shell : une valeur de parametre
+# ne peut pas etre interpretee comme du shell.
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: onyxia-agent-bench
+  labels:
+    app: onyxia-agent-bench-workflow
+spec:
+  entrypoint: benchmark
+  onExit: cleanup
+  serviceAccountName: argo-workflows   # SA du service Argo d'Onyxia, auquel argo/rbac.yaml ajoute nos droits
+  # Plafond de duree du workflow entier. Les resultats sont dans MLflow : un workflow termine
+  # n'a pas besoin de rester (les pods et leurs logs sont gardes 7 jours, pas plus).
+  activeDeadlineSeconds: 172800
+  ttlStrategy:
+    secondsAfterCompletion: 604800
+  workflowMetadata:
+    labels:
+      app: onyxia-agent-bench-workflow
+  arguments:
+    parameters:
+      # --- ce que l'on mesure
+      - name: agent
+        value: opencode
+        enum: [opencode, claude]
+        description: "Agent pilote : opencode (modele auto-heberge) ou claude (claude -p, frontier)."
+      - name: model
+        value: ""
+        description: "opencode : provider/model (vide = defaut du harnais, onyxia/qwen3-6-35b-moe). claude : identifiant COMPLET du modele (OBLIGATOIRE) : claude-opus-5-5, pas opus-5.5 ; un alias (opus, sonnet, haiku) marche aussi. Le run verifie le modele par un appel minuscule avant de lancer la moindre cellule."
+      - name: suite
+        value: context
+        enum: [context, model, candidate, all]
+        description: "Jeu de taches (context = defaut, celles qui mesurent l'apport du contexte)."
+      - name: tasks
+        value: ""
+        description: "Ids de taches separes par des virgules ; non vide = remplace `suite` (ex. t10_diag_403,t03_mlflow_train)."
+      - name: configs
+        value: "C0,C4"
+        description: "Configs comparees : C0 (agent nu) et C4 (config complete)."
+      - name: seeds
+        value: "5"
+      - name: workers
+        value: "4"
+        description: "Cellules en parallele (un Job par cellule en isolation pod : dimensionner face au quota du namespace)."
+      # --- ou tourne chaque cellule
+      - name: isolation
+        value: pod
+        enum: [pod, process]
+        description: "pod : un Job ephemere par cellule (strict, necessite argo/rbac.yaml). process : l'agent tourne DANS le pod orchestrateur et voit tout son environnement (Secret compris)."
+      - name: pod_image
+        value: "ghcr.io/micedre/onyxia-agent-bench-pod:r4.6.1-py3.13.15-2026.09.07-claude2.1.286"
+        description: "Image des cellules (isolation pod). Doit contenir tar et le binaire de l'agent."
+      - name: pod_claude_version
+        value: "2.1.286"
+        description: "Version de Claude Code installee dans la cellule si l'image n'en a pas."
+      # --- ou vont les resultats
+      - name: experiment
+        value: "opencode-onyxia-bench"
+        description: "Experience MLflow."
+      - name: run_name
+        value: ""
+        description: "Nom du run MLflow (vide = nom du workflow)."
+      - name: mlflow
+        value: "true"
+        enum: ["true", "false"]
+        description: "false : pas de journalisation MLflow (tests). ATTENTION : sans MLflow, rien ne survit au pod hormis les logs."
+      # --- code du harnais et pod orchestrateur
+      - name: repo_url
+        value: "https://github.com/micedre/onyxia-agent-bench"
+      - name: repo_ref
+        value: "main"
+        description: "Branche, tag ou sha du harnais a lancer (epingler un sha pour un run dont on cite les chiffres)."
+      - name: image
+        value: "ghcr.io/micedre/onyxia-agent-bench-pod:r4.6.1-py3.13.15-2026.09.07-claude2.1.286"
+        description: "Image de l'orchestrateur (git, kubectl, python + mlflow)."
+      - name: secret_name
+        value: onyxia-agent-bench
+        description: "Secret du namespace qui porte les identifiants (voir argo/README.md)."
+      - name: cpu
+        value: "2"
+        description: "CPU de l'orchestrateur (notation des cellules). Augmenter en isolation process."
+      - name: memory
+        value: "4Gi"
+      - name: scratch_size
+        value: "20Gi"
+        description: "Espace disque temporaire du run (workspaces des cellules)."
+
+  templates:
+    - name: benchmark
+      volumes:
+        - name: scratch
+          emptyDir:
+            sizeLimit: 20Gi          # valeur par defaut ; remplacee par `scratch_size` (podSpecPatch)
+      # Argo valide les quantites (cpu, memoire, sizeLimit) AVANT de substituer les parametres : un
+      # `{{workflow.parameters.cpu}}` dans `resources` est refuse ("quantities must match the regular
+      # expression"). Les valeurs ci-dessous sont les defauts ; podSpecPatch, applique apres
+      # substitution, les remplace par les parametres `cpu`, `memory` et `scratch_size`.
+      podSpecPatch: |
+        {"containers": [{"name": "main",
+                         "resources": {"requests": {"cpu": "{{workflow.parameters.cpu}}",
+                                                    "memory": "{{workflow.parameters.memory}}",
+                                                    "ephemeral-storage": "{{workflow.parameters.scratch_size}}"},
+                                       "limits": {"memory": "{{workflow.parameters.memory}}"}}}],
+         "volumes": [{"name": "scratch",
+                      "emptyDir": {"sizeLimit": "{{workflow.parameters.scratch_size}}"}}]}
+      outputs:
+        parameters:
+          - name: result
+            valueFrom:
+              path: /tmp/result
+              default: "(pas de resultat : voir les logs)"
+      script:
+        image: "{{workflow.parameters.image}}"
+        imagePullPolicy: IfNotPresent
+        command: [bash]
+        workingDir: /work
+        volumeMounts:
+          - name: scratch
+            mountPath: /work
+        resources:
+          requests: {cpu: "2", memory: 4Gi, ephemeral-storage: 20Gi}
+          limits: {memory: 4Gi}
+        envFrom:
+          - secretRef:
+              name: "{{workflow.parameters.secret_name}}"
+              optional: true
+        env:
+          - { name: AGENT, value: "{{workflow.parameters.agent}}" }
+          - { name: MODEL, value: "{{workflow.parameters.model}}" }
+          - { name: SUITE, value: "{{workflow.parameters.suite}}" }
+          - { name: TASKS, value: "{{workflow.parameters.tasks}}" }
+          - { name: CONFIGS, value: "{{workflow.parameters.configs}}" }
+          - { name: SEEDS, value: "{{workflow.parameters.seeds}}" }
+          - { name: WORKERS, value: "{{workflow.parameters.workers}}" }
+          - { name: ISOLATION, value: "{{workflow.parameters.isolation}}" }
+          - { name: POD_IMAGE, value: "{{workflow.parameters.pod_image}}" }
+          - { name: POD_CLAUDE_VERSION, value: "{{workflow.parameters.pod_claude_version}}" }
+          - { name: EXPERIMENT, value: "{{workflow.parameters.experiment}}" }
+          - { name: RUN_NAME, value: "{{workflow.parameters.run_name}}" }
+          - { name: MLFLOW, value: "{{workflow.parameters.mlflow}}" }
+          - { name: REPO_URL, value: "{{workflow.parameters.repo_url}}" }
+          - { name: REPO_REF, value: "{{workflow.parameters.repo_ref}}" }
+          - { name: SECRET_NAME, value: "{{workflow.parameters.secret_name}}" }
+          - { name: WORKFLOW_NAME, value: "{{workflow.name}}" }
+          - { name: NAMESPACE, value: "{{workflow.namespace}}" }
+        source: |
+          set -euo pipefail
+          die() { echo "ERREUR : $*" >&2; exit 1; }
+          # parametre de sortie `result` : valeur par defaut si le script s'arrete avant le bilan
+          echo "echec avant la fin du run : voir les logs du workflow" > /tmp/result
+
+          # ---------------------------------------------------------------- 1. parametres
+          case "$AGENT" in opencode|claude) ;; *) die "agent '$AGENT' invalide (opencode|claude)" ;; esac
+          case "$ISOLATION" in pod|process) ;; *) die "isolation '$ISOLATION' invalide (pod|process)" ;; esac
+          case "$SUITE" in context|model|candidate|all) ;; *) die "suite '$SUITE' invalide (context|model|candidate|all)" ;; esac
+          case "$MLFLOW" in true|false) ;; *) die "mlflow '$MLFLOW' invalide (true|false)" ;; esac
+          [[ "$SEEDS" =~ ^[1-9][0-9]*$ ]]   || die "seeds '$SEEDS' : entier >= 1 attendu"
+          [[ "$WORKERS" =~ ^[1-9][0-9]*$ ]] || die "workers '$WORKERS' : entier >= 1 attendu"
+          [[ "$CONFIGS" =~ ^C[0-4](,C[0-4])*$ ]] || die "configs '$CONFIGS' : liste de C0..C4 separes par des virgules"
+          [[ -z "$TASKS" || "$TASKS" =~ ^[A-Za-z0-9_]+(,[A-Za-z0-9_]+)*$ ]] || die "tasks '$TASKS' : ids separes par des virgules"
+          [[ "$REPO_URL" =~ ^https://[A-Za-z0-9._/-]+$ ]] || die "repo_url doit etre une URL https simple"
+          [[ "$REPO_REF" =~ ^[A-Za-z0-9._/-]+$ ]] || die "repo_ref '$REPO_REF' invalide"
+          [[ -n "$EXPERIMENT" ]] || die "experiment vide"
+          RUN_NAME="${RUN_NAME:-$WORKFLOW_NAME}"
+          [[ "$RUN_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || die "run_name '$RUN_NAME' : lettres, chiffres, . _ - seulement"
+          if [ "$AGENT" = claude ] && [ -z "$MODEL" ]; then
+            die "model est obligatoire avec agent=claude (ex. claude-opus-5-5)"
+          fi
+          # Erreur classique : `agent` vaut opencode par defaut. Un modele Claude (opus, sonnet,
+          # haiku, claude-*) lance avec opencode donne 50 cellules sans un seul tour.
+          if [ "$AGENT" = opencode ] && [[ "$MODEL" =~ ^(opus|sonnet|haiku|fable|claude-[A-Za-z0-9._-]+)(\[1m\])?$ ]]; then
+            die "model '$MODEL' est un modele Claude mais agent=opencode (le defaut) : relancer avec agent=claude"
+          fi
+          if [ "$AGENT" = claude ] && [[ "$MODEL" == */* ]]; then
+            die "model '$MODEL' a la forme provider/model d'un modele opencode mais agent=claude : utiliser agent=opencode, ou un identifiant Claude (claude-opus-5-5)"
+          fi
+
+          # ---------------------------------------------------------------- 2. identifiants (Secret)
+          if [ "$AGENT" = claude ]; then
+            [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || die "CLAUDE_CODE_OAUTH_TOKEN absent du Secret '$SECRET_NAME' (le generer avec 'claude setup-token', voir argo/README.md)"
+          else
+            [ -n "${OPENCODE_ONYXIA_BASE_URL:-}" ] && [ -n "${OPENCODE_ONYXIA_API_KEY:-}" ] \
+              || die "OPENCODE_ONYXIA_BASE_URL / OPENCODE_ONYXIA_API_KEY absents du Secret '$SECRET_NAME' (voir argo/README.md)"
+          fi
+
+          # ---------------------------------------------------------------- 3. MLflow
+          # Sans MLFLOW_TRACKING_URI le harnais ecrit dans un SQLite LOCAL AU POD : le run
+          # "reussirait" puis disparaitrait avec le pod. On refuse de demarrer, et on verifie
+          # l'acces (lecture ET creation de l'experience) avant de depenser des heures de calcul.
+          if [ "$MLFLOW" = true ]; then
+            [ -n "${MLFLOW_TRACKING_URI:-}" ] || die "MLFLOW_TRACKING_URI absent du Secret '$SECRET_NAME' : sans lui les resultats seraient perdus avec le pod (mlflow=false pour un test sans journalisation)"
+            timeout 90 python - <<'PY' || die "MLflow injoignable ou refuse l'acces (URL ? MLFLOW_TRACKING_USERNAME / _PASSWORD dans le Secret ?)"
+          import os
+          import mlflow
+          mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+          mlflow.set_experiment(os.environ["EXPERIMENT"])
+          print("MLflow OK :", os.environ["MLFLOW_TRACKING_URI"], "| experience :", os.environ["EXPERIMENT"])
+          PY
+          fi
+
+          # ---------------------------------------------------------------- 4. harnais
+          mkdir -p /work/repo && cd /work/repo
+          git init -q
+          git remote add origin "$REPO_URL"
+          git fetch -q --depth 1 origin "$REPO_REF" || die "git fetch '$REPO_REF' depuis $REPO_URL impossible"
+          git checkout -q FETCH_HEAD
+          echo "harnais : $(git rev-parse --short HEAD) ($REPO_REF) depuis $REPO_URL"
+
+          # ---------------------------------------------------------------- 5. run
+          args=(run --agent "$AGENT" --suite "$SUITE" --configs "$CONFIGS" --seeds "$SEEDS"
+                --workers "$WORKERS" --isolation "$ISOLATION" --run-name "$RUN_NAME"
+                --experiment "$EXPERIMENT" --out "/work/runs/$RUN_NAME")
+          if [ -n "$MODEL" ]; then args+=(--model "$MODEL"); fi
+          if [ -n "$TASKS" ]; then args+=(--tasks "$TASKS"); fi
+          if [ "$MLFLOW" = false ]; then args+=(--no-mlflow); fi
+          if [ "$ISOLATION" = pod ]; then
+            args+=(--pod-image "$POD_IMAGE" --pod-namespace "$NAMESPACE")
+            if [ "$AGENT" = claude ]; then args+=(--pod-claude-version "$POD_CLAUDE_VERSION"); fi
+          fi
+          echo "+ python -m bench ${args[*]}"
+          export PYTHONPATH="$PWD"
+          # `bench run` sort en non-zero si le pre-controle de l'agent echoue ou si le run est
+          # interrompu (cellules perdues d'affilee) : on garde ce code, mais on produit TOUJOURS
+          # le bilan et le parametre de sortie avant de sortir.
+          set +e
+          python -m bench "${args[@]}" 2>&1 | tee /work/bench.log
+          bench_rc=${PIPESTATUS[0]}
+          set -e
+
+          # ---------------------------------------------------------------- 6. bilan
+          out="/work/runs/$RUN_NAME"
+          if [ -f "$out/summary.json" ]; then
+            echo; echo "================ report.md ================"; cat "$out/report.md" || true
+            set +e
+            python - <<'PY'
+          import json, os
+          out = f"/work/runs/{os.environ['RUN_NAME']}"
+          s = json.load(open(f"{out}/summary.json"))
+          n, nv = s["n_cells"], s["n_valid"]
+          d = s.get("delta_combined_paired")
+          cmp_ = s.get("compared") or {}
+          ab = (s.get("meta") or {}).get("aborted")
+          txt = f"{nv}/{n} cellules valides"
+          if d:
+              txt += (f" ; {cmp_.get('high')}-{cmp_.get('low')} apparie {d['mean']:+.2f} "
+                      f"IC95 [{d['ci95'][0]:+.2f}, {d['ci95'][1]:+.2f}] (n={d['n']} paires)")
+          if ab:
+              txt += (f" ; RUN INTERROMPU : {ab['reason']} ({ab['cells_skipped']} cellules non "
+                      f"lancees) ; dernier message de l'agent : {ab['last_message'][:200]}")
+          if os.environ["MLFLOW"] == "true":
+              txt += f" ; MLflow : experience '{os.environ['EXPERIMENT']}', run '{os.environ['RUN_NAME']}'"
+          open("/tmp/result", "w").write(txt)
+          print("RESULTAT :", txt)
+          # Le harnais sort en 0 meme si aucune cellule n'a tourne : un workflow "Succeeded" sans
+          # aucun resultat serait trompeur.
+          raise SystemExit(0 if nv > 0 and not ab else 1)
+          PY
+            bilan_rc=$?
+            set -e
+          else
+            # rien n'a tourne (pre-controle de l'agent refuse, arguments invalides...) : la raison
+            # est dans les logs ; on la remonte aussi dans le parametre de sortie.
+            reason=$(grep -m1 -E '^\[preflight\] ECHEC|^pre-controle echoue|^ERREUR' /work/bench.log || true)
+            echo "${reason:-echec avant la fin du run : voir les logs du workflow}" > /tmp/result
+            bilan_rc=1
+          fi
+          if [ "$bench_rc" -ne 0 ]; then exit "$bench_rc"; fi
+          exit "$bilan_rc"
+
+    # Nettoyage : meme si le workflow est arrete ou echoue, ne laisser ni Job de cellule ni Secret
+    # de run (qui contient le jeton de l'agent). Le balayage du harnais ne passe qu'au run suivant.
+    - name: cleanup
+      container:
+        image: "{{workflow.parameters.image}}"
+        imagePullPolicy: IfNotPresent
+        command: [bash, -c]
+        args:
+          - |
+            name="${RUN_NAME:-$WORKFLOW_NAME}"
+            label=$(printf '%s' "$name" | sed 's/[^A-Za-z0-9_.-]/-/g; s/^[-_.]*//; s/[-_.]*$//' | cut -c1-63)
+            echo "statut du workflow : $WORKFLOW_STATUS ; nettoyage des ressources du run '$label'"
+            if [ "$ISOLATION" = pod ] && [ -n "$label" ]; then
+              kubectl delete jobs,secrets -n "$NAMESPACE" -l "app=onyxia-agent-bench,bench/run-id=$label" \
+                --ignore-not-found --wait=false || echo "(nettoyage impossible : voir argo/rbac.yaml)"
+            fi
+        env:
+          - { name: RUN_NAME, value: "{{workflow.parameters.run_name}}" }
+          - { name: WORKFLOW_NAME, value: "{{workflow.name}}" }
+          - { name: WORKFLOW_STATUS, value: "{{workflow.status}}" }
+          - { name: ISOLATION, value: "{{workflow.parameters.isolation}}" }
+          - { name: NAMESPACE, value: "{{workflow.namespace}}" }
+        resources:
+          requests: { cpu: 50m, memory: 128Mi }

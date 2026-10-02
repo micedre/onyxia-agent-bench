@@ -602,6 +602,18 @@ cause, sont arrivees dans un run reel (`--model opus-5.5` : l'identifiant Claude
   un avertissement et `bench run` sort en erreur. Il protege aussi d'un jeton qui expire ou d'une limite d'usage
   atteinte en cours de run, que le pre-controle ne voit pas. Les cellules deja lancees vont au bout.
 
+## Lancer sur le cluster avec Argo Workflows
+
+`argo/` fournit un `WorkflowTemplate` qui lance le benchmark dans un pod du cluster, avec l'agent, le
+modèle, la suite, les configs et les seeds en paramètres, et les résultats dans MLflow. Il faut un
+Secret dans le namespace (URL MLflow, clé du modèle ou jeton Claude) et un ServiceAccount : tout est
+décrit dans [`argo/README.md`](argo/README.md).
+
+```bash
+argo submit --from workflowtemplate/onyxia-agent-bench --watch \
+  -p agent=claude -p model=claude-opus-5-5 -p suite=context -p experiment=ntts2027
+```
+
 ## Prochaines étapes
 
 - **Échelle d'ablation plus fine** : rungs `C4-noperm` (garde-fous sans `bash: ask`) et
