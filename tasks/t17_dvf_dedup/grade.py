@@ -4,7 +4,7 @@ type_local Appartement. Credit 0.5 si le resultat correspond a la version naive 
 from bench.outcome import (
     Check,
     compare_with_alternatives,
-    find,
+    find_output,
     keyed_values,
     load_truth,
     read_table,
@@ -20,7 +20,7 @@ def grade(ctx):
     chk, info = reexecute(ws, [OUT])
     rws = info["ws"]
     checks = [chk]
-    p = find(rws, OUT)
+    p = find_output(rws, OUT)
     if not p:
         return checks + [Check("sales_count_correct", False, 0.0, weight=2.0,
                                detail="sortie absente")]

@@ -15,7 +15,14 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from bench.grading import Check, deliverable_files, rank_entry_scripts, run_in_project
+from bench.grading import (
+    Check,
+    _is_layer_path,
+    _layer_injected_files,
+    deliverable_files,
+    rank_entry_scripts,
+    run_in_project,
+)
 
 # --------------------------------------------------------------------------- fichiers
 
@@ -39,6 +46,42 @@ def find(ws: Path, name: str) -> Path | None:
 
 def find_all(ws: Path, name: str) -> list[Path]:
     return deliverable_files(ws, [name])
+
+
+#: Repertoires jamais consideres comme un emplacement de sortie : depot git, environnements,
+#: caches d'outils (ils peuvent contenir des fichiers de meme nom sans etre le travail de l'agent).
+_OUTPUT_SKIP_DIRS = {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache",
+                     ".grade_venv", ".mypy_cache", ".ipynb_checkpoints"}
+
+
+def find_outputs(ws: Path, name: str) -> list[Path]:
+    """Fichiers de SORTIE nommes `name` (glob autorise), presents SUR DISQUE.
+
+    Contrairement a `find`, un fichier ignore par git est vu. Un script qui regenere sa sortie
+    la depose sur le disque : c'est son existence apres re-execution qui prouve la regeneration,
+    pas sa visibilite pour git. Verifie sur de vraies cellules : les 10 cellules Opus de t18 et 7 des
+    10 du 27B avaient `part_communes_sous_seuil.csv` dans leur `.gitignore` (la regle « pas de
+    donnees dans Git » de la plateforme) et le grader les jugeait « absentes », ce qui plafonnait la
+    tache pres de 0.47 quoi que fasse l'agent. A n'utiliser que pour les sorties DECLAREES : le code
+    de l'agent reste cherche par `find`/`deliverable_files` (visibles par git), qui ecartent les
+    fichiers de couche. Les fichiers de couche restent ecartes ici aussi.
+    """
+    ws = ws.resolve()
+    injected = _layer_injected_files(ws)
+    out = []
+    for p in ws.rglob(name):
+        rel = p.relative_to(ws)
+        if (not p.is_file() or set(rel.parts) & _OUTPUT_SKIP_DIRS or _is_layer_path(rel)
+                or p.resolve() in injected):
+            continue
+        out.append(p)
+    out.sort(key=lambda p: (len(p.relative_to(ws).parts), str(p)))
+    return out
+
+
+def find_output(ws: Path, name: str) -> Path | None:
+    files = find_outputs(ws, name)
+    return files[0] if files else None
 
 
 # --------------------------------------------------------------------------- execution
@@ -105,8 +148,10 @@ def reexecute(ws: Path, outputs: list[str], *, name: str = "script_reexecutes",
     except OSError as e:
         return (Check(name, False, 0.0, axis=axis, detail=f"copie du workspace impossible: {e}"),
                 {"ws": ws})
+    # Suppression SUR LE DISQUE (y compris les sorties ignorees par git) : sinon le CSV de l'agent
+    # resterait dans la copie et la verification ci-dessous passerait a vide.
     for out in outputs:
-        for p in find_all(rerun, out):
+        for p in find_outputs(rerun, out):
             p.unlink(missing_ok=True)
 
     scripts = candidate_scripts(rerun, exts, exclude_names)
@@ -118,11 +163,11 @@ def reexecute(ws: Path, outputs: list[str], *, name: str = "script_reexecutes",
     for script in scripts[:max_candidates]:
         info = _run_one(rerun, script, timeout=timeout, env_extra=env)
         tried.append(info["detail"])
-        if all(find(rerun, o) for o in outputs):
+        if all(find_output(rerun, o) for o in outputs):
             info["ws"] = rerun
             return Check(name, True, 1.0, axis=axis,
                          detail=f"{info['script']} : {info['detail']}"), info
-    missing = [o for o in outputs if not find(rerun, o)]
+    missing = [o for o in outputs if not find_output(rerun, o)]
     info["ws"] = ws  # repli : on note ce que l'agent a livre, sans le detruire
     cause = _diagnose_rerun_failure(rerun, scripts[:max_candidates], tried)
     return (Check(name, False, 0.0, axis=axis,
@@ -276,7 +321,7 @@ def table_check(ws: Path, filename: str, truth: dict[str, float], *, name: str,
     Penser a resserrer `rel_tol`/`abs_tol` par tache : le defaut de 1 % est trop large pour
     des agregats, au point d'absorber le piege qu'on veut mesurer (sur t14, `mean` au lieu de
     `median` passait inapercu dans 9 departements sur 13)."""
-    p = find(ws, filename)
+    p = find_output(ws, filename)
     if not p:
         return [Check(f"{name}_present", False, 0.0, detail=f"{filename} absent"),
                 Check(name, False, 0.0, weight=weight, detail="fichier absent")]

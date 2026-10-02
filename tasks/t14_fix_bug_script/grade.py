@@ -8,7 +8,7 @@ etait donc invisible et 'ne rien corriger du tout' notait deja 0.54."""
 from bench.outcome import (
     Check,
     compare_with_alternatives,
-    find,
+    find_output,
     git_diff_stat_vs_initial,
     keyed_values,
     load_truth,
@@ -25,7 +25,7 @@ def grade(ctx):
     chk, info = reexecute(ws, [OUT])
     rws = info["ws"]
     checks = [chk]
-    p = find(rws, OUT)
+    p = find_output(rws, OUT)
     got = keyed_values(read_table(p), [r"dep"], [r"median|revenu"]) if p else {}
     checks.append(Check("medians_correct_present", bool(got), 1.0 if got else 0.0,
                         detail=f"{len(got)} ligne(s) lue(s)" if got else f"{OUT} absent"))

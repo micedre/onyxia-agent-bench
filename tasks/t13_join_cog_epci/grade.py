@@ -8,7 +8,7 @@ from bench.grading import code_text, no_hardcoded_secrets
 from bench.outcome import (
     Check,
     compare_with_alternatives,
-    find,
+    find_output,
     json_strings,
     keyed_values,
     load_json,
@@ -30,7 +30,7 @@ def grade(ctx):
     rws = info["ws"]
     checks = [chk]
 
-    p = find(rws, OUT[0])
+    p = find_output(rws, OUT[0])
     if p:
         got = keyed_values(read_table(p), [r"epci"], [r"revenu|moyen|median|mean"])
         full = compare_with_alternatives(

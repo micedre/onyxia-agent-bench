@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 
 from bench.grading import Check, code_text, no_hardcoded_secrets
-from bench.outcome import find, reexecute
+from bench.outcome import find_output, reexecute
 
 TRUTH = json.loads((Path(__file__).parent / "ground_truth.json").read_text(encoding="utf-8"))
 REPORT, MEDIANS = "validation_report.json", "revenu_median_departement.csv"
@@ -109,7 +109,7 @@ def _rows_count(report) -> int | None:
 
 
 def _grade_report(ws: Path) -> list[Check]:
-    p = find(ws, REPORT)
+    p = find_output(ws, REPORT)
     if not p:
         return [Check("report_present", False, 0.0, detail=f"{REPORT} absent")]
     try:
@@ -197,7 +197,7 @@ def _read_medians(p: Path) -> dict[str, float]:
 
 
 def _grade_medians(ws: Path) -> list[Check]:
-    p = find(ws, MEDIANS)
+    p = find_output(ws, MEDIANS)
     if not p:
         return [Check("medians_present", False, 0.0, detail=f"{MEDIANS} absent")]
     got = _read_medians(p)
