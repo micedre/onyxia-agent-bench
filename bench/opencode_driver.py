@@ -29,7 +29,8 @@ from pathlib import Path
 
 from bench import k8s
 from bench.cellenv import GIT_IDENTITY_ENV
-from bench.schema import Event, RunResult, TaskSpec, Transcript
+from bench.k8s import PULL_TIMEOUT_S
+from bench.schema import PULL_FAILED_MARKER, Event, RunResult, TaskSpec, Transcript
 
 # --------------------------------------------------------------------------------------
 # Parsing de la sortie `opencode run --format json`.
@@ -349,7 +350,7 @@ class PodOpenCodeDriver(BaseDriver):
                     except Exception as de:  # diagnostic best-effort
                         last_err += f" (diagnostic k8s impossible : {de!r})"
                     if attempt < self.ready_retries:
-                        k8s.delete("job", job_name, self.namespace, wait=True, timeout=60)
+                        k8s.delete("job", job_name, self.namespace, wait=True, timeout=PULL_TIMEOUT_S)
                         continue
                     return fail(last_err, exit_code=1)
 
@@ -441,14 +442,15 @@ class PodOpenCodeDriver(BaseDriver):
         except (RuntimeError, subprocess.TimeoutExpired) as e:
             # on garde quand meme la sortie de l'exec : mieux vaut un grade partiel
             # (fichiers non recuperes) qu'une cellule totalement perdue.
-            err += f"\n[PULL WORKSPACE ECHOUE] {e}"
+            err += f"\n{PULL_FAILED_MARKER} {e}"
 
         transcript = self.parse(out)
         if err:
             transcript.raw_stdout += "\n[STDERR]\n" + err
         res = RunResult(task.id, config_id, model, seed, workspace, transcript,
                         exit_code=rc, timed_out=timed_out, wall_clock_s=time.time() - t0,
-                        error=None if rc == 0 else f"exit={rc}")
+                        error=(f"exit={rc}" if rc != 0 else "pull workspace echoue"
+                               if PULL_FAILED_MARKER in err else None))
         res.agent_s = agent_s  # duree de l'appel agent seul (hors cycle de vie du pod)
         return res
 

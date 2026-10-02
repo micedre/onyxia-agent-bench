@@ -220,9 +220,19 @@ def push_workspace(ws: Path, pod: str, namespace: str, workdir: str, *, timeout:
         raise RuntimeError(f"push workspace a echoue : {r.stderr.decode(errors='replace')}")
 
 
+# Reconstructibles et volumineux (un venv uv depasse vite plusieurs centaines de Mo) : jamais utiles
+# a la notation, et c'est leur taille qui a fait expirer le rapatriement (t03/C4/seed0).
+PULL_EXCLUDES = (".venv", "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache",
+                 ".mypy_cache", ".ipynb_checkpoints", ".cache")
+PULL_TIMEOUT_S = 300
+
+
+def pull_command(workdir: str) -> list[str]:
+    return ["tar", "-C", workdir, *[f"--exclude={e}" for e in PULL_EXCLUDES], "-czf", "-", "."]
+
+
 def pull_workspace(pod: str, namespace: str, workdir: str, ws: Path, *, timeout: float):
-    r = subprocess.run(["kubectl", "exec", pod, "-n", namespace, "--",
-                        "tar", "-C", workdir, "-czf", "-", "."],
+    r = subprocess.run(["kubectl", "exec", pod, "-n", namespace, "--", *pull_command(workdir)],
                        capture_output=True, timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError(f"pull workspace a echoue : {r.stderr.decode(errors='replace')}")

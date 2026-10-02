@@ -236,6 +236,11 @@ tâche* (le dépôt du harnais, `.env`, les fixtures des autres tâches). Il ne 
 un agent qui détournerait des identifiants de plateforme *légitimement* fournis pour une tâche à
 notation live (aucune tâche actuelle n'en a besoin).
 
+**Rapatriement du workspace.** Le `tar` de retour exclut `.venv`, `node_modules`, `__pycache__`
+et les caches d'outils, avec un délai de 300 s. Un rapatriement qui échoue est un défaut
+d'infrastructure (`status=error`, exclu des moyennes, compté en fiabilité) : on ne note jamais le
+workspace poussé, resté inchangé.
+
 ## Exécution en parallèle (`--workers`)
 
 Les cellules sont indépendantes (chacune son répertoire, ou en `--isolation pod` son propre
@@ -443,6 +448,14 @@ qui note doit contenir ce qu'un agent utilise raisonnablement : `pandas`, `pyarr
 `quarto`, `Rscript` et `argo` restent optionnels : un check qui en dépend est **neutre**
 (`skipped`) s'ils manquent, plutôt que noté 0 — l'agent, lui, tourne dans l'image de la
 plateforme, qui les a.
+
+**Sorties déclarées jugées sur le disque.** `reexecute` et `table_check` cherchent les sorties
+déclarées (CSV, rapport) avec `outcome.find_output`, qui regarde le **disque**, pas la visibilité
+git : les agents mettent le CSV régénéré dans `.gitignore` (règle « pas de données dans Git »
+de la plateforme), et l'ancienne lecture « git-visible » le jugeait absent. La suppression avant
+ré-exécution se fait aussi sur le disque, sinon le CSV de l'agent resterait dans la copie et la
+vérification passerait à vide. Le *code* livré reste détecté par git (pour ne jamais créditer les
+fichiers de couche).
 
 **Fixtures réelles** : pour remplacer une fixture synthétique par un vrai extrait, déposer le
 fichier dans `fixtures/` avec le même schéma et recalculer `ground_truth.json` avec la même

@@ -117,7 +117,14 @@ class RunResult:
 VALID_STATUSES = ("ok", "timeout", "agent_error")
 
 
+PULL_FAILED_MARKER = "[PULL WORKSPACE ECHOUE]"
+
+
 def cell_status(run: RunResult) -> str:
+    if PULL_FAILED_MARKER in (run.transcript.raw_stdout or ""):
+        # le workspace de l'agent n'a pas ete recupere : on noterait le workspace pousse, inchange.
+        # Defaut d'infrastructure, jamais un resultat : exclu des moyennes, compte en fiabilite.
+        return "error"
     if run.error is None:
         return "ok"
     if run.timed_out or run.exit_code == 124 or "[TIMEOUT]" in (run.transcript.raw_stdout or ""):
